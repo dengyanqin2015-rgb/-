@@ -639,14 +639,13 @@ const parseOrderDataLocal = (orders: { internalOrderNumber: string, productCode:
         if (hasMultipleParts && isComprehensive && numDimensionGroups > 1) {
             for (const part of partsToProcess) {
                 let w=0, h=0, dimsFoundInPart = false; let contextText = part; let dimMatch, diameterMatch;
-                dimMatch = part.match(dimRegexObj);
-                if (dimMatch) { w = convertToMm(dimMatch[1]); h = convertToMm(dimMatch[2]); dimsFoundInPart = true; contextText = contextText.replace(dimMatch[0], ''); } 
-                else {
-                    diameterMatch = part.match(diameterRegexObj);
-                    if (diameterMatch) { 
-                        const dStr = diameterMatch[1] || diameterMatch[2];
-                        const d = convertToMm(dStr); w = d; h = d; dimsFoundInPart = true; contextText = contextText.replace(diameterMatch[0], ''); 
-                    }
+                diameterMatch = part.match(diameterRegexObj);
+                if (diameterMatch) { 
+                    const dStr = diameterMatch[1] || diameterMatch[2];
+                    const d = convertToMm(dStr); w = d; h = d; dimsFoundInPart = true; contextText = contextText.replace(diameterMatch[0], ''); 
+                } else {
+                    dimMatch = part.match(dimRegexObj);
+                    if (dimMatch) { w = convertToMm(dimMatch[1]); h = convertToMm(dimMatch[2]); dimsFoundInPart = true; contextText = contextText.replace(dimMatch[0], ''); }
                 }
                 if(dimsFoundInPart) {
                     processed = true; let qty = 1;
@@ -661,14 +660,14 @@ const parseOrderDataLocal = (orders: { internalOrderNumber: string, productCode:
         
         if (!processed) {
             let w = 0, h = 0, dimsFound = false; let contextText = fullText; let dimMatch, diameterMatch, spaceDimMatch, concatDimMatch, slashDimMatch;
-            dimMatch = fullText.match(dimRegexObj);
-            if (dimMatch) { w = convertToMm(dimMatch[1]); h = convertToMm(dimMatch[2]); dimsFound = true; contextText = contextText.replace(dimMatch[0], ''); } 
+            diameterMatch = fullText.match(diameterRegexObj);
+            if(diameterMatch) { 
+                const dStr = diameterMatch[1] || diameterMatch[2];
+                const d = convertToMm(dStr); w = d; h = d; dimsFound = true; contextText = contextText.replace(diameterMatch[0], ''); 
+            } 
             else {
-                diameterMatch = fullText.match(diameterRegexObj);
-                if(diameterMatch) { 
-                    const dStr = diameterMatch[1] || diameterMatch[2];
-                    const d = convertToMm(dStr); w = d; h = d; dimsFound = true; contextText = contextText.replace(diameterMatch[0], ''); 
-                } 
+                dimMatch = fullText.match(dimRegexObj);
+                if (dimMatch) { w = convertToMm(dimMatch[1]); h = convertToMm(dimMatch[2]); dimsFound = true; contextText = contextText.replace(dimMatch[0], ''); } 
                 else {
                     if (settings.enableSpacePattern) {
                         const spaceDimMatch = fullText.match(/(\d{3,})\s+(\d{3,})/);
