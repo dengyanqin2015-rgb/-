@@ -98,8 +98,44 @@ interface FreeRect {
 const MAX_INT = Number.MAX_SAFE_INTEGER;
 
 // Strategy Definitions
+type AlgorithmType = 'MAXRECTS' | 'SKYLINE' | 'SHELF';
 type SortStrategy = 'AREA_DESC' | 'LONGSIDE_DESC' | 'SHORTSIDE_DESC' | 'PERIMETER_DESC' | 'WIDTH_DESC' | 'COMPLEMENTARY' | 'SMART_WIDTH_MATCH' | 'RANDOM' | 'ORDER_GROUP' | 'ORDER_PRIORITY_OPTIMIZED' | 'AUTO_MULTI_PRIORITY' | 'CUSTOM';
 type Heuristic = 'BSSF' | 'BLSF' | 'BAF'; // Best Short Side Fit, Best Long Side Fit, Best Area Fit
+
+interface SavedStrategy {
+    id: string;
+    name: string;
+    algorithm: AlgorithmType;
+    sortStrategy: SortStrategy;
+    heuristic: Heuristic;
+    allowRotation: boolean;
+    utilization: number; 
+    usageCount: number;
+    createdAt: number;
+    isCustom?: boolean;
+    description?: string;
+}
+
+const STRATEGY_LIB_KEY = 'nesting_strategy_library';
+
+const defaultStrategies: SavedStrategy[] = [
+    { id: 'def-1', name: '经典面积降序', algorithm: 'MAXRECTS', sortStrategy: 'AREA_DESC', heuristic: 'BSSF', allowRotation: true, utilization: 0.85, usageCount: 0, createdAt: Date.now() },
+    { id: 'def-2', name: '极速天际线', algorithm: 'SKYLINE', sortStrategy: 'WIDTH_DESC', heuristic: 'BSSF', allowRotation: true, utilization: 0.82, usageCount: 0, createdAt: Date.now() }
+];
+
+const loadStrategyLibrary = (): SavedStrategy[] => {
+    const saved = localStorage.getItem(STRATEGY_LIB_KEY);
+    if (!saved) return defaultStrategies;
+    try {
+        return JSON.parse(saved);
+    } catch {
+        return defaultStrategies;
+    }
+};
+
+const saveStrategyLibrary = (lib: SavedStrategy[]) => {
+    localStorage.setItem(STRATEGY_LIB_KEY, JSON.stringify(lib));
+};
 
 // Main entry for multi-page packing
 const packLayout = (
@@ -111,7 +147,8 @@ const packLayout = (
     useRandom: boolean,
     sortStrategy: SortStrategy = 'AREA_DESC',
     heuristic: Heuristic = 'BSSF',
-    groupByOrder: boolean = false
+    groupByOrder: boolean = false,
+    algorithm: AlgorithmType = 'MAXRECTS'
 ): FullLayout => {
     
     // 1. Preparation & Sorting
@@ -241,9 +278,214 @@ const packLayout = (
     return { pages, totalW: containerWidth, totalH };
 };
 
+const packShelf = (
+    itemsSource: AppItem[], 
+    containerWidth: number, 
+    maxH: number, 
+    spacing: number, 
+    allowRotation: boolean, 
+    pageIndex: number
+) => {
+    const items = [...itemsSource];
+    const packed: AppItem[] = [];
+    const unpacked: AppItem[] = [];
+    
+    let currentX = 0;
+    let currentY = 0;
+    let shelfHeight = 0;
+
+    for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        let w = item.w + spacing;
+        let h = item.h + spacing;
+        let rotated = false;
+
+        if (allowRotation && h > w && h <= containerWidth) {
+            [w, h] = [h, w];
+            rotated = true;
+        }
+
+        if (currentX + w > containerWidth) {
+            currentX = 0;
+            currentY += shelfHeight;
+            shelfHeight = 0;
+        }
+
+        if (currentY + h > maxH) {
+            unpacked.push(...items.slice(i));
+            break;
+        }
+
+        packed.push({
+            ...item,
+            x: currentX,
+            y: currentY,
+            rotated,
+            rotationAngle: rotated ? 90 : 0,
+            pageIndex
+        });
+
+        currentX += w;
+        shelfHeight = Math.max(shelfHeight, h);
+    }
+
+    const pageH = currentY + shelfHeight;
+    return {
+        page: { pageIndex, boxes: packed, w: containerWidth, h: pageH },
+        unpacked
+    };
+};
+
+interface SkylineSegment { x: number; y: number; w: number; }
+
+const packSkyline = (
+    itemsSource: AppItem[], 
+    containerWidth: number, 
+    maxH: number, 
+    spacing: number, 
+    allowRotation: boolean, 
+    useRandom: boolean, 
+    pageIndex: number
+) => {
+    const items = [...itemsSource];
+    const packed: AppItem[] = [];
+    const unpacked: AppItem[] = [];
+    
+    let skyline: SkylineSegment[] = [{ x: 0, y: 0, w: containerWidth }];
+
+    const findLowestY = () => {
+        let minY = MAX_INT;
+        let index = -1;
+        for (let i = 0; i < skyline.length; i++) {
+            if (skyline[i].y < minY) {
+                minY = skyline[i].y;
+                index = i;
+            }
+        }
+        return index;
+    };
+
+    while (items.length > 0) {
+        let bestItemIdx = -1;
+        let bestSegmentIdx = -1;
+        let bestRotated = false;
+        let bestY = MAX_INT;
+        let bestRect = { x: 0, y: 0, w: 0, h: 0 };
+
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            const dims = [{ w: item.w + spacing, h: item.h + spacing, rot: false }];
+            if (allowRotation) dims.push({ w: item.h + spacing, h: item.w + spacing, rot: true });
+
+            for (const d of dims) {
+                // Try to fit at each segment
+                for (let j = 0; j < skyline.length; j++) {
+                    if (skyline[j].x + d.w > containerWidth) continue;
+
+                    // Calculate y at this position (max y of segments covered)
+                    let currentY = 0;
+                    let widthLeft = d.w;
+                    for (let k = j; k < skyline.length && widthLeft > 0; k++) {
+                        currentY = Math.max(currentY, skyline[k].y);
+                        widthLeft -= skyline[k].w;
+                    }
+
+                    if (currentY + d.h > maxH) continue;
+
+                    // Heuristic: Prefer lowest y, then lowest x
+                    if (currentY < bestY) {
+                        bestY = currentY;
+                        bestItemIdx = i;
+                        bestSegmentIdx = j;
+                        bestRotated = d.rot;
+                        bestRect = { x: skyline[j].x, y: currentY, w: d.w, h: d.h };
+                    }
+                }
+            }
+        }
+
+        if (bestItemIdx === -1) break;
+
+        const item = items[bestItemIdx];
+        const newBox = { 
+            ...item, 
+            x: bestRect.x, 
+            y: bestRect.y, 
+            rotated: bestRotated, 
+            rotationAngle: bestRotated ? 90 : 0, 
+            pageIndex 
+        };
+        packed.push(newBox);
+        items.splice(bestItemIdx, 1);
+
+        // Update skyline
+        const newSegment = { x: bestRect.x, y: bestRect.y + bestRect.h, w: bestRect.w };
+        
+        // Find segments covered
+        let firstCovered = bestSegmentIdx;
+        let lastCovered = bestSegmentIdx;
+        let widthRemaining = bestRect.w;
+        let k = bestSegmentIdx;
+        while (k < skyline.length && widthRemaining > 0) {
+            lastCovered = k;
+            widthRemaining -= skyline[k].w;
+            k++;
+        }
+
+        // Handle splitting last segment if not fully covered
+        const lastSeg = skyline[lastCovered];
+        const lastSegRight = lastSeg.x + lastSeg.w;
+        const newRectRight = bestRect.x + bestRect.w;
+
+        const replacements: SkylineSegment[] = [newSegment];
+        if (newRectRight < lastSegRight) {
+            replacements.push({ x: newRectRight, y: lastSeg.y, w: lastSegRight - newRectRight });
+        }
+
+        skyline.splice(firstCovered, lastCovered - firstCovered + 1, ...replacements);
+
+        // Merge adjacent segments with same y
+        for (let s = 0; s < skyline.length - 1; s++) {
+            if (skyline[s].y === skyline[s+1].y) {
+                skyline[s].w += skyline[s+1].w;
+                skyline.splice(s + 1, 1);
+                s--;
+            }
+        }
+    }
+
+    unpacked.push(...items);
+    const pageH = packed.length > 0 ? Math.max(...packed.map(b => b.y + (b.rotated ? b.w : b.h))) : 0;
+
+    return {
+        page: { pageIndex, boxes: packed, w: containerWidth, h: pageH },
+        unpacked
+    };
+};
+
 // Helper: Pack a single page, return packed items and remaining items
-const packOnePage = (itemsSource: AppItem[], containerWidth: number, maxHeight: number, spacing: number, allowRotation: boolean, useRandom: boolean, heuristic: Heuristic, useSequentialPacking: boolean, pageIndex: number, sortStrategy?: SortStrategy) => {
+const packOnePage = (
+    itemsSource: AppItem[], 
+    containerWidth: number, 
+    maxHeight: number, 
+    spacing: number, 
+    allowRotation: boolean, 
+    useRandom: boolean, 
+    heuristic: Heuristic, 
+    useSequentialPacking: boolean, 
+    pageIndex: number, 
+    sortStrategy?: SortStrategy,
+    algorithm: AlgorithmType = 'MAXRECTS'
+) => {
     const effectiveMaxH = (maxHeight > 0) ? maxHeight : MAX_INT;
+    
+    if (algorithm === 'SKYLINE') {
+        return packSkyline(itemsSource, containerWidth, effectiveMaxH, spacing, allowRotation, useRandom, pageIndex);
+    }
+    if (algorithm === 'SHELF') {
+        return packShelf(itemsSource, containerWidth, effectiveMaxH, spacing, allowRotation, pageIndex);
+    }
+
     let freeRects: FreeRect[] = [{ x: 0, y: 0, w: containerWidth, h: effectiveMaxH }];
     
     const packed: AppItem[] = [];
@@ -397,7 +639,8 @@ const mutateSequence = (indices: number[], items: AppItem[]) => {
 
 const runGA = async (
     items: AppItem[], containerW: number, containerH: number, spacing: number, allowRotation: boolean, groupByOrder: boolean,
-    onProgress: (progress: number, bestLayout: FullLayout, bestCount: number) => void, shouldStop: () => boolean
+    onProgress: (progress: number, bestLayout: FullLayout, bestCount: number) => void, shouldStop: () => boolean,
+    algorithm: AlgorithmType = 'MAXRECTS'
 ) => {
     const POP_SIZE = 24; const GENERATIONS = 40; const ELITISM = 2;
     let population = generatePopulation(items, POP_SIZE);
@@ -407,7 +650,7 @@ const runGA = async (
         if (shouldStop()) break;
         const evaluated = population.map(indices => {
             const ordered = indices.map(i => items[i]);
-            const layout = packLayout(ordered, containerW, containerH, spacing, allowRotation, false, 'CUSTOM', 'BSSF', groupByOrder);
+            const layout = packLayout(ordered, containerW, containerH, spacing, allowRotation, false, 'CUSTOM', 'BSSF', groupByOrder, algorithm);
             const count = layout.pages.reduce((acc, p) => acc + p.boxes.length, 0);
             return { indices, layout, count, fitness: layout.totalH };
         });
@@ -860,8 +1103,8 @@ const StagedItemRow = React.memo(({ item, index, rowIndex, onChange, onDelete, o
             <td className="read-only notes-cell" title={item.notes}>{item.notes}</td>
             <td>
                 <div style={{display: 'flex', flexWrap: 'wrap', gap: '4px'}}>
-                    {(item.classification || '').split(',').map(tag => (
-                        <span key={tag} style={{background: '#e7f5ff', color: '#1971c2', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', whiteSpace: 'nowrap'}}>
+                    {(item.classification || '').split(',').map((tag, tagIndex) => (
+                        <span key={`${tag}-${tagIndex}`} style={{background: '#e7f5ff', color: '#1971c2', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', whiteSpace: 'nowrap'}}>
                             {tag}
                         </span>
                     ))}
@@ -1733,6 +1976,88 @@ interface ReviewEditModalProps {
     onClose: () => void;
 }
 
+interface MultiInsertModalProps {
+    items: AppItem[];
+    onConfirm: (count: number, orientation: 'default' | 'horizontal' | 'vertical') => void;
+    onClose: () => void;
+}
+
+const MultiInsertModal = ({ items, onConfirm, onClose }: MultiInsertModalProps) => {
+    const [count, setCount] = useState(items.length);
+    const [orientation, setOrientation] = useState<'default' | 'horizontal' | 'vertical'>('default');
+
+    if (items.length === 0) return null;
+    const repItem = items[0];
+
+    return (
+        <div className="modal-backdrop" onClick={onClose} style={{zIndex: 2001}}>
+            <div className="modal-content" onClick={e => e.stopPropagation()} style={{maxWidth: '400px'}}>
+                <div className="modal-header">
+                    <h4>多件插入设置: {repItem.internalOrderNumber}</h4>
+                    <button onClick={onClose} className="button-close">&times;</button>
+                </div>
+                <div className="modal-body">
+                    <div style={{display: 'flex', gap: '1rem', marginBottom: '1.5rem', alignItems: 'center'}}>
+                        <div style={{width: '60px', height: '60px', border: '1px solid #eee', padding: '5px'}}>
+                            <ItemPreview item={repItem} />
+                        </div>
+                        <div>
+                            <p style={{margin: 0, fontWeight: 'bold'}}>{repItem.internalOrderNumber}</p>
+                            <p style={{margin: 0, fontSize: '0.85rem', color: '#666'}}>{repItem.w} x {repItem.h} mm</p>
+                            <p style={{margin: 0, fontSize: '0.85rem', color: '#666'}}>总计: {items.length} 件</p>
+                        </div>
+                    </div>
+
+                    <div className="form-group">
+                        <label>插入数量 (默认全部)</label>
+                        <input 
+                            type="number" 
+                            min="1" 
+                            max={items.length} 
+                            value={count} 
+                            onChange={e => setCount(Math.min(items.length, Math.max(1, parseInt(e.target.value) || 1)))}
+                        />
+                    </div>
+
+                    <div className="form-group">
+                        <label>插入方式 (物体方向)</label>
+                        <div style={{display: 'flex', gap: '0.5rem'}}>
+                            <button 
+                                className={`button button-small ${orientation === 'default' ? 'active' : ''}`}
+                                onClick={() => setOrientation('default')}
+                                style={{flex: 1, backgroundColor: orientation === 'default' ? '#1971c2' : '', color: orientation === 'default' ? 'white' : ''}}
+                            >
+                                默认
+                            </button>
+                            <button 
+                                className={`button button-small ${orientation === 'horizontal' ? 'active' : ''}`}
+                                onClick={() => setOrientation('horizontal')}
+                                style={{flex: 1, backgroundColor: orientation === 'horizontal' ? '#2f9e44' : '', color: orientation === 'horizontal' ? 'white' : ''}}
+                            >
+                                强制横
+                            </button>
+                            <button 
+                                className={`button button-small ${orientation === 'vertical' ? 'active' : ''}`}
+                                onClick={() => setOrientation('vertical')}
+                                style={{flex: 1, backgroundColor: orientation === 'vertical' ? '#e67e22' : '', color: orientation === 'vertical' ? 'white' : ''}}
+                            >
+                                强制竖
+                            </button>
+                        </div>
+                        <p style={{fontSize: '0.75rem', color: '#999', marginTop: '0.5rem'}}>
+                            提示: 选中单元格后将优先在其右侧连续排列
+                        </p>
+                    </div>
+                </div>
+                <div className="modal-footer">
+                    <button onClick={onClose} className="button" style={{backgroundColor: '#6c757d', color: 'white'}}>取消</button>
+                    <button onClick={() => onConfirm(count, orientation)} className="button button-primary">确认插入</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const ReviewEditModal = ({ item, index, onChange, onClose }: ReviewEditModalProps) => {
     if (!item) return null;
     const uploadRef = useRef(null);
@@ -1795,7 +2120,7 @@ const ReviewEditModal = ({ item, index, onChange, onClose }: ReviewEditModalProp
 };
 
 // --- New Material Box Component ---
-const MaterialBox = ({ title, items, onSelect, selectedGroupKey, onDoubleClick, onClose, isPreset = false }) => {
+const MaterialBox = ({ title, items, onSelect, selectedGroupKey, onDoubleClick, onClose, setMultiInsertConfig, isPreset = false }) => {
     const [position, setPosition] = useState({ x: isPreset ? 100 : window.innerWidth - 320, y: 150 });
     const [size, setSize] = useState({ w: 300, h: 400 });
     const [isDragging, setIsDragging] = useState(false);
@@ -1879,7 +2204,13 @@ const MaterialBox = ({ title, items, onSelect, selectedGroupKey, onDoubleClick, 
                     return (
                         <div key={key} 
                              onClick={() => onSelect(key, group)}
-                             onDoubleClick={() => onDoubleClick(group)}
+                             onDoubleClick={() => {
+                                 if (isPreset) {
+                                     onDoubleClick(group);
+                                 } else {
+                                     setMultiInsertConfig({ open: true, items: group });
+                                 }
+                             }}
                              draggable="true"
                              onDragStart={(e) => {
                                  e.dataTransfer.setData("application/json", JSON.stringify({ key, isPreset }));
@@ -1976,6 +2307,96 @@ const App = () => {
     const [materialWidth, setMaterialWidth] = useState(1500);
     const [materialLength, setMaterialLength] = useState(0); // 0 means infinite
     const [spacing, setSpacing] = useState(10);
+    const [nestingAlgorithm, setNestingAlgorithm] = useState<AlgorithmType>('MAXRECTS');
+    const [isLibOpen, setIsLibOpen] = useState(false);
+    const [strategyLibrary, setStrategyLibrary] = useState<SavedStrategy[]>([]);
+
+    const exportLibrary = () => {
+        const data = JSON.stringify(strategyLibrary, null, 2);
+        const blob = new Blob([data], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `nesting_strategies_${new Date().toISOString().slice(0,10)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    const importLibrary = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            try {
+                const imported = JSON.parse(event.target?.result as string);
+                if (Array.isArray(imported)) {
+                    setStrategyLibrary(imported);
+                    saveStrategyLibrary(imported);
+                    alert(`成功导入 ${imported.length} 个策略`);
+                }
+            } catch (error) {
+                alert('导入失败: 格式错误');
+            }
+        };
+        reader.readAsText(file);
+    };
+
+    const deleteStrategy = (id: string) => {
+        const updated = strategyLibrary.filter(s => s.id !== id);
+        setStrategyLibrary(updated);
+        saveStrategyLibrary(updated);
+    };
+
+    const clearLibrary = () => {
+        if (confirm('确定要清空所有策略记录吗？')) {
+            setStrategyLibrary(defaultStrategies);
+            saveStrategyLibrary(defaultStrategies);
+        }
+    };
+
+    useEffect(() => {
+        setStrategyLibrary(loadStrategyLibrary());
+    }, []);
+
+    const learnFromLayout = useCallback((layout: FullLayout, alg: AlgorithmType, sort: SortStrategy, heur: Heuristic, rot: boolean) => {
+        // Calculate total utilization
+        let totalUsedArea = 0;
+        let totalSheetArea = 0;
+        layout.pages.forEach(p => {
+            p.boxes.forEach(b => {
+                totalUsedArea += b.w * b.h;
+            });
+            totalSheetArea += p.w * p.h;
+        });
+        
+        const utilization = totalSheetArea > 0 ? totalUsedArea / totalSheetArea : 0;
+        
+        if (utilization >= 0.90) {
+            setStrategyLibrary(prev => {
+                // Similarity check: avoid duplicates
+                const isDuplicate = prev.some(s => s.algorithm === alg && s.sortStrategy === sort && s.heuristic === heur && s.allowRotation === rot);
+                if (isDuplicate) return prev;
+
+                const newStrategy: SavedStrategy = {
+                    id: `strat-${Date.now()}`,
+                    name: `高效策略-${Math.round(utilization * 100)}%`,
+                    algorithm: alg,
+                    sortStrategy: sort,
+                    heuristic: heur,
+                    allowRotation: rot,
+                    utilization,
+                    usageCount: 1,
+                    createdAt: Date.now()
+                };
+                
+                const updated = [...prev, newStrategy].sort((a, b) => b.utilization - a.utilization);
+                // Auto-cleanup: keep top 50 strategies
+                const final = updated.slice(0, 50);
+                saveStrategyLibrary(final);
+                return final;
+            });
+        }
+    }, []);
     const [allowRotation, setAllowRotation] = useState(true);
     const [useRandom, setUseRandom] = useState(false);
     const [groupByOrder, setGroupByOrder] = useState(false);
@@ -2066,31 +2487,71 @@ const App = () => {
         });
     };
 
-    const handleBoxItemInsert = (itemsToInsert: AppItem | AppItem[], forceRotation: boolean | null = null, isPreset: boolean = false) => {
-        const items = Array.isArray(itemsToInsert) ? itemsToInsert : [itemsToInsert];
-        if (items.length === 0 || !layout) return;
+    const [multiInsertConfig, setMultiInsertConfig] = useState<{ open: boolean, items: AppItem[] }>({ open: false, items: [] });
+
+    const handleBoxItemInsert = (itemsToInsert: AppItem | AppItem[], forceRotation: boolean | null = null, isPreset: boolean = false, countToInsert?: number, orientation?: 'default' | 'horizontal' | 'vertical') => {
+        const fullItems = Array.isArray(itemsToInsert) ? itemsToInsert : [itemsToInsert];
+        if (fullItems.length === 0 || !layout) return;
+
+        const count = countToInsert !== undefined ? Math.min(countToInsert, fullItems.length) : fullItems.length;
+        const items = fullItems.slice(0, count);
         
         pushHistory(layout, materialBoxItems); // Save state once
 
         let currentPages = [...layout.pages];
+        let currentInsertionPoint: { pageIndex: number, x: number, y: number } | null = null;
         
+        if (selectedItem) {
+            const sourcePage = currentPages.find(p => p.boxes.some(b => b.id === selectedItem.id));
+            if (sourcePage) {
+                const itemW = selectedItem.rotated ? selectedItem.h : selectedItem.w;
+                currentInsertionPoint = {
+                    pageIndex: sourcePage.pageIndex,
+                    x: selectedItem.x + itemW + spacing,
+                    y: selectedItem.y
+                };
+            }
+        }
+
         items.forEach(item => {
-            // Logic for finding insertion point
             let targetPage: PageLayout;
             let finalX = 0;
             let finalY = 0;
 
-            if (selectedItem) {
-                // Find current page of selected item
-                const sourcePage = currentPages.find(p => p.boxes.some(b => b.id === selectedItem.id));
-                if (sourcePage) {
-                    targetPage = sourcePage;
-                    finalX = selectedItem.x;
-                    const itemH = selectedItem.rotated ? selectedItem.w : selectedItem.h;
-                    finalY = selectedItem.y + itemH + 5; // Place below with 5mm overlap/gap
-                } else {
-                    targetPage = currentPages[currentPages.length - 1] || { pageIndex: 1, boxes: [], w: materialWidth, h: 0 };
-                    if (!currentPages.length) currentPages.push(targetPage);
+            // Determine rotation
+            let rotated = false;
+            if (orientation === 'horizontal') {
+                rotated = item.h > item.w;
+            } else if (orientation === 'vertical') {
+                rotated = item.w > item.h;
+            } else if (forceRotation !== null) {
+                rotated = forceRotation;
+            } else {
+                const w = item.w; const h = item.h;
+                if (w > materialWidth && h <= materialWidth) rotated = true;
+                else if (h > materialWidth && w <= materialWidth) rotated = false;
+                else if (allowRotation && h > w) rotated = true;
+                else if (w > h) rotated = false; 
+            }
+
+            const itemW = rotated ? item.h : item.w;
+            const itemH = rotated ? item.w : item.h;
+
+            if (currentInsertionPoint) {
+                targetPage = currentPages.find(p => p.pageIndex === currentInsertionPoint!.pageIndex) || currentPages[currentPages.length-1];
+                finalX = currentInsertionPoint.x;
+                finalY = currentInsertionPoint.y;
+
+                // Check bounds: if too wide, wrap to next line or resume standard flow
+                if (finalX + itemW > materialWidth) {
+                    finalX = 0;
+                    let maxY = 0;
+                    targetPage.boxes.forEach(b => {
+                        const bH = b.rotated ? b.w : b.h;
+                        if (b.y + bH > maxY) maxY = b.y + bH;
+                    });
+                    finalY = maxY > 0 ? maxY + spacing : 0;
+                    currentInsertionPoint = null; // Exit right-aligned flow if it wraps
                 }
             } else {
                 targetPage = currentPages[currentPages.length - 1] || { pageIndex: 1, boxes: [], w: materialWidth, h: 0 };
@@ -2102,24 +2563,9 @@ const App = () => {
                     if (b.y + bH > maxY) maxY = b.y + bH;
                 });
                 finalY = maxY > 0 ? maxY + spacing : 0;
+                finalX = 0;
             }
-
-            // Determine rotation
-            let rotated = false;
-            if (forceRotation !== null) {
-                rotated = forceRotation;
-            } else {
-                const w = item.w; const h = item.h;
-                if (w > materialWidth && h <= materialWidth) rotated = true;
-                else if (h > materialWidth && w <= materialWidth) rotated = false;
-                else if (w > h) rotated = false; 
-            }
-
-            const itemH = rotated ? item.w : item.h;
             
-            // Check if placing here exceeds materialLength (if set)
-            // Use a loop to find a page where it fits or create new ones until it fits
-            // Breaking loop if no fit is found after creating new pages (avoid infinite loop)
             let placed = false;
             let loopCount = 0;
             while (!placed && loopCount < 50) { 
@@ -2129,23 +2575,19 @@ const App = () => {
                     const bH = b.rotated ? b.w : b.h;
                     if (b.y + bH > maxY) maxY = b.y + bH;
                 });
-                // If we are just starting on a new page (empty boxes), finalY should be 0 (or spacing)
-                // If we are appending to existing page, it should be after maxY
-                if (targetPage.boxes.length > 0 && finalY < maxY + spacing) {
+
+                if (targetPage.boxes.length > 0 && finalY < maxY + spacing && !currentInsertionPoint) {
                     finalY = maxY + spacing;
                 }
                 
-                const fits = materialLength === 0 || finalY + itemH <= materialLength;
+                const fits = (finalX + itemW <= materialWidth) && (materialLength === 0 || finalY + itemH <= materialLength);
                 const isStartOfPage = finalY === 0 || targetPage.boxes.length === 0;
 
                 if (fits) {
                     placed = true;
                 } else if (isStartOfPage) {
-                    // It doesn't fit even at the start of a page (item too huge).
-                    // Place it anyway to avoid crash/loss, user can delete or resize.
                     placed = true;
                 } else {
-                    // Doesn't fit, try next page
                     const nextPageIndex = targetPage.pageIndex + 1;
                     let nextPage = currentPages.find(p => p.pageIndex === nextPageIndex);
                     if (!nextPage) {
@@ -2153,13 +2595,15 @@ const App = () => {
                         currentPages.push(nextPage);
                     }
                     targetPage = nextPage;
-                    finalY = 0; // Reset Y for new page check
+                    finalY = 0; 
+                    finalX = 0;
+                    currentInsertionPoint = null;
                 }
             }
 
             const newItem = {
                 ...item,
-                id: isPreset ? `preset-${Date.now()}-${Math.random()}` : item.id,
+                id: isPreset ? `preset-${Date.now()}-${Math.random()}` : `${item.id}-${Date.now()}-${Math.random()}`,
                 x: finalX,
                 y: finalY,
                 rotated: rotated,
@@ -2175,12 +2619,18 @@ const App = () => {
             if (pageIdx !== -1) {
                 currentPages[pageIdx] = { ...targetPage, boxes: newBoxes, h: newPageH };
             }
+
+            // Update insertion point for next item (continue to the right)
+            currentInsertionPoint = {
+                pageIndex: targetPage.pageIndex,
+                x: finalX + itemW + spacing,
+                y: finalY
+            };
         });
 
         const newTotalH = currentPages.reduce((acc, p) => acc + p.h, 0);
         setLayout({ ...layout, pages: currentPages, totalH: newTotalH });
         
-        // Remove from box if it's NOT a preset
         if (!isPreset) {
             const insertedIds = new Set(items.map(i => i.id));
             setMaterialBoxItems(prev => prev.filter(i => !insertedIds.has(i.id)));
@@ -2566,29 +3016,74 @@ const App = () => {
         setStagedItems(prev => [newItem, ...prev]);
     };
 
+    const [tabSort, setTabSort] = useState<'alpha' | 'qty_desc' | 'qty_asc'>('alpha');
+    const [selectedMaterialFilter, setSelectedMaterialFilter] = useState<string>('全部');
+
+    const filteredGroupKeys = useMemo(() => {
+        if (!groupedOrders) return [];
+        return Object.keys(groupedOrders)
+            .filter(key => {
+                if (key === '全部混排') return false;
+                if (selectedMaterialFilter === '全部') return true;
+                return key.startsWith(selectedMaterialFilter + ' /');
+            })
+            .sort((a, b) => {
+                if (tabSort === 'qty_desc') return groupedOrders[b].length - groupedOrders[a].length;
+                if (tabSort === 'qty_asc') return groupedOrders[a].length - groupedOrders[b].length;
+                return a.localeCompare(b, 'zh-CN');
+            });
+    }, [groupedOrders, selectedMaterialFilter, tabSort]);
+
+    useEffect(() => {
+        if (currentStep === 3 && filteredGroupKeys.length > 0) {
+            if (!selectedGroupKey || (selectedGroupKey !== '全部混排' && !filteredGroupKeys.includes(selectedGroupKey))) {
+                handleGroupSelection(filteredGroupKeys[0]);
+            }
+        }
+    }, [filteredGroupKeys, currentStep]);
+
     const handleConfirmAndGroup = () => {
-        const newGroups = {}; const allItemsGroup = [];
+        const newGroups = {}; 
+        const allItemsGroup = [];
+
         stagedItems.forEach(order => {
             if (order.material && order.color && order.w > 0 && order.h > 0) {
-                const key = `${order.material} / ${order.color}`;
-                if (!newGroups[key]) newGroups[key] = [];
+                const mixedKey = `${order.material} / ${order.color}`;
+                
+                if (!newGroups[mixedKey]) newGroups[mixedKey] = [];
+
                 const quantity = parseInt(String(order.qty), 10) || 1;
                 for (let i = 0; i < quantity; i++) {
                     const baseId = `${order.id}-${i}`;
-                    const itemGroup = { ...order, id: baseId, originalId: order.id, };
-                    newGroups[key].push(itemGroup);
-                    const itemMixed = { ...order, id: `${baseId}-mix`, originalId: order.id, };
-                    allItemsGroup.push(itemMixed);
+                    const itemMixedGroup = { ...order, id: baseId, originalId: order.id, };
+                    newGroups[mixedKey].push(itemMixedGroup);
+
+                    const itemAllMixed = { ...order, id: `${baseId}-mix`, originalId: order.id, };
+                    allItemsGroup.push(itemAllMixed);
                 }
             }
         });
+
         if (allItemsGroup.length > 0) newGroups['全部混排'] = allItemsGroup;
+        
         setGroupedOrders(newGroups);
-        const firstGroupKey = Object.keys(newGroups).sort()[0] || null;
+        const firstGroupKey = Object.keys(newGroups).sort().find(k => k !== '全部混排') || '全部混排';
         setSelectedGroupKey(firstGroupKey);
+        setSelectedMaterialFilter('全部');
         setLayout(null);
         setCurrentStep(3);
     };
+
+    const stagedUniqueMaterials = useMemo(() => {
+        const counts: Record<string, number> = {};
+        stagedItems.forEach(item => {
+            if (item.material) {
+                const qty = parseInt(String(item.qty), 10) || 1;
+                counts[item.material] = (counts[item.material] || 0) + qty;
+            }
+        });
+        return Object.keys(counts).sort().map(name => ({ name, count: counts[name] }));
+    }, [stagedItems]);
 
     const handleSyncRules = (itemIndex: number) => {
         const item = unprocessedItems[itemIndex];
@@ -2744,7 +3239,8 @@ const App = () => {
             setMaterialBoxItems(box);
             if (box.length > 0) setIsMaterialBoxVisible(true);
             const strategy = customStrategy || 'AREA_DESC';
-            const currentResult = packLayout(main, materialWidth, materialLength, spacing, allowRotation, useRandom, strategy, 'BSSF', groupByOrder);
+            const currentResult = packLayout(main, materialWidth, materialLength, spacing, allowRotation, useRandom, strategy, 'BSSF', groupByOrder, nestingAlgorithm);
+            learnFromLayout(currentResult, nestingAlgorithm, strategy, 'BSSF', allowRotation);
             setLayout(currentResult);
             setIsNesting(false);
         } catch (e) { setError(`排版算法出错 (Algorithm failed): ${e.message}`); setIsNesting(false); }
@@ -2802,7 +3298,8 @@ const App = () => {
                             setLayout(globalBestResult.layout);
                         }
                     },
-                    () => stopDeepSearchRef.current
+                    () => stopDeepSearchRef.current,
+                    nestingAlgorithm
                 );
             }
         } catch (e) { setError(`优化过程出错: ${e.message}`); } finally { setIsOptimizing(false); setStatusText(''); }
@@ -2818,9 +3315,23 @@ const App = () => {
             setMaterialBoxItems(box);
             if (box.length > 0) setIsMaterialBoxVisible(true);
             let bestLayout = null;
+            let bestStrategyParams = null;
             let minTotalHeight = Number.MAX_SAFE_INTEGER;
             let maxItemsPacked = 0;
             const strategies = [];
+            
+            // Add library strategies (Top 5)
+            strategyLibrary.slice(0, 5).forEach(s => {
+                strategies.push({ 
+                    sort: s.sortStrategy, 
+                    heur: s.heuristic, 
+                    random: false, 
+                    algorithm: s.algorithm, 
+                    allowRotation: s.allowRotation,
+                    isFromLib: true 
+                });
+            });
+
             if (groupByOrder) {
                 strategies.push({ sort: 'ORDER_PRIORITY_OPTIMIZED', heur: 'BSSF', random: false });
                 strategies.push({ sort: 'ORDER_GROUP', heur: 'BSSF', random: false });
@@ -2844,8 +3355,9 @@ const App = () => {
             for (let i = 0; i < totalIterations; i++) {
                 if (stopDeepSearchRef.current) { stopDeepSearchRef.current = false; break; }
                 const strat = strategies[i];
-                const effectiveRotation = strat.forceNoRotation ? false : allowRotation;
-                const result = packLayout(main, materialWidth, materialLength, spacing, effectiveRotation, strat.random, strat.sort, strat.heur, groupByOrder);
+                const effectiveRotation = strat.isFromLib ? strat.allowRotation : (strat.forceNoRotation ? false : allowRotation);
+                const effectiveAlg = strat.algorithm || nestingAlgorithm;
+                const result = packLayout(main, materialWidth, materialLength, spacing, effectiveRotation, strat.random, strat.sort, strat.heur, groupByOrder, effectiveAlg);
                 const totalPacked = result.pages.reduce((sum, p) => sum + p.boxes.length, 0);
                 const currentTotalH = result.totalH;
                 let isBetter = false;
@@ -2860,12 +3372,25 @@ const App = () => {
                     maxItemsPacked = totalPacked;
                     minTotalHeight = currentTotalH;
                     bestLayout = result;
+                    bestStrategyParams = {
+                        alg: effectiveAlg,
+                        sort: strat.sort,
+                        heur: strat.heur,
+                        rot: effectiveRotation
+                    };
                     setBestStats({ count: maxItemsPacked, height: minTotalHeight });
                 }
                 setOptimizationProgress(Math.round(((i + 1) / totalIterations) * 100));
                 if (i % 2 === 0) await new Promise(resolve => setTimeout(resolve, 0));
             }
-            if (bestLayout) setLayout(bestLayout); else runNesting();
+            if (bestLayout) {
+                setLayout(bestLayout);
+                if (bestStrategyParams) {
+                    learnFromLayout(bestLayout, bestStrategyParams.alg, bestStrategyParams.sort, bestStrategyParams.heur, bestStrategyParams.rot);
+                }
+            } else {
+                runNesting();
+            }
         } catch (e) { setError(`优化过程出错: ${e.message}`); } finally { setIsOptimizing(false); }
    };
 
@@ -3021,6 +3546,7 @@ const App = () => {
         if (layout && materialLength > 0) {
             const newLayout = rebalancePages(layout, materialLength);
             setLayout(newLayout);
+            learnFromLayout(newLayout, 'MAXRECTS', 'MANUAL', 'BSSF', allowRotation);
         }
     };
     
@@ -3097,12 +3623,29 @@ const App = () => {
                 const guides = [];
                 const xCandidates = [0, materialWidth - myW];
                 const yCandidates = [0];
+                
                 activePage.boxes.forEach(other => {
                     if (selectedItemIds.has(other.id)) return; 
                     const otherW = other.rotated ? other.h : other.w;
                     const otherH = other.rotated ? other.w : other.h;
-                    xCandidates.push(other.x); xCandidates.push(other.x + otherW - myW); xCandidates.push(other.x + otherW); xCandidates.push(other.x - myW); xCandidates.push(other.x + otherW + spacing); xCandidates.push(other.x - myW - spacing);
-                    yCandidates.push(other.y); yCandidates.push(other.y + otherH - myH); yCandidates.push(other.y + otherH); yCandidates.push(other.y - myH); yCandidates.push(other.y + otherH + spacing); yCandidates.push(other.y - myH - spacing);
+                    
+                    const ox1 = other.x;
+                    const ox2 = other.x + otherW;
+                    const oy1 = other.y;
+                    const oy2 = other.y + otherH;
+
+                    // Add candidates only if they are potentially within snap range to save memory/loops
+                    if (Math.abs(ox1 - newX) < SNAP_THRESHOLD || Math.abs(ox2 - myW - newX) < SNAP_THRESHOLD || 
+                        Math.abs(ox2 - newX) < SNAP_THRESHOLD || Math.abs(ox1 - myW - newX) < SNAP_THRESHOLD ||
+                        Math.abs(ox2 + spacing - newX) < SNAP_THRESHOLD || Math.abs(ox1 - myW - spacing - newX) < SNAP_THRESHOLD) {
+                        xCandidates.push(ox1, ox2 - myW, ox2, ox1 - myW, ox2 + spacing, ox1 - myW - spacing);
+                    }
+
+                    if (Math.abs(oy1 - newY) < SNAP_THRESHOLD || Math.abs(oy2 - myH - newY) < SNAP_THRESHOLD ||
+                        Math.abs(oy2 - newY) < SNAP_THRESHOLD || Math.abs(oy1 - myH - newY) < SNAP_THRESHOLD ||
+                        Math.abs(oy2 + spacing - newY) < SNAP_THRESHOLD || Math.abs(oy1 - myH - spacing - newY) < SNAP_THRESHOLD) {
+                        yCandidates.push(oy1, oy2 - myH, oy2, oy1 - myH, oy2 + spacing, oy1 - myH - spacing);
+                    }
                 });
                 let minDiffX = MAX_INT;
                 xCandidates.forEach(val => { const diff = Math.abs(val - newX); if (diff < SNAP_THRESHOLD && diff < minDiffX) { minDiffX = diff; snappedX = val; } });
@@ -3138,6 +3681,14 @@ const App = () => {
     };
 
     const allBoxes = useMemo(() => layout ? layout.pages.flatMap(p => p.boxes) : [], [layout]);
+    const duplicateMap = useMemo(() => {
+        const dMap = new Map();
+        allBoxes.forEach(b => {
+            const num = b.internalOrderNumber;
+            dMap.set(num, (dMap.get(num) || 0) + 1);
+        });
+        return dMap;
+    }, [allBoxes]);
 
     const handleItemEdit = useCallback((field, value) => { if (!editedItem) return; setEditedItem(prev => ({ ...prev, [field]: parseFloat(value) || 0 })); }, [editedItem]);
     const handleCornerEdit = useCallback((corner, value) => { if (!editedItem) return; setEditedItem(prev => ({ ...prev, cornerRadius: { ...prev.cornerRadius, [corner]: parseFloat(value) || 0 } })); }, [editedItem]);
@@ -3161,136 +3712,207 @@ const App = () => {
 
     useEffect(() => {
         if (!layout || !canvasRef.current || !canvasContainerRef.current) return;
-        const canvas = canvasRef.current; const container = canvasContainerRef.current; const ctx = canvas.getContext('2d');
-        const parentWidth = container.clientWidth;
-        const scale = parentWidth / layout.totalW;
-        let totalCanvasHeightLayoutUnits = 0;
-        layout.pages.forEach((p, i) => {
-             totalCanvasHeightLayoutUnits += p.h;
-             if (i < layout.pages.length - 1) totalCanvasHeightLayoutUnits += SECTION_GAP;
-        });
-        totalCanvasHeightLayoutUnits += 100;
-        canvas.width = layout.totalW * scale;
-        canvas.height = totalCanvasHeightLayoutUnits * scale;
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.save();
-        ctx.translate(canvasTransform.x, canvasTransform.y);
-        ctx.scale(canvasTransform.scale, canvasTransform.scale);
-        ctx.save();
-        ctx.scale(scale, scale);
-        const effectiveScale = scale * canvasTransform.scale;
-        let currentYOffset = 50; 
-        const duplicateMap = new Map();
-        allBoxes.forEach(b => {
-            const num = b.internalOrderNumber;
-            duplicateMap.set(num, (duplicateMap.get(num) || 0) + 1);
-        });
-        layout.pages.forEach((page, pIdx) => {
-            const pageHeight = page.h;
-            const boundaryH = materialLength > 0 ? materialLength : pageHeight;
-            ctx.strokeStyle = '#999';
-            ctx.lineWidth = 2 / effectiveScale;
-            ctx.setLineDash([10 / effectiveScale, 10 / effectiveScale]);
-            ctx.strokeRect(0, currentYOffset, layout.totalW, boundaryH);
-            ctx.setLineDash([]);
-            ctx.fillStyle = '#6c757d';
-            ctx.font = `bold ${24 / effectiveScale}px Arial`;
-            ctx.textAlign = 'left';
-            ctx.textBaseline = 'bottom';
-            ctx.fillText(`Section ${page.pageIndex} (Used: ${pageHeight}mm / Limit: ${boundaryH}mm)`, 0, currentYOffset - (5 / effectiveScale));
-            const overlaps = new Set();
-            for (let i = 0; i < page.boxes.length; i++) {
-                const b1 = page.boxes[i];
-                const b1W = b1.rotated ? b1.h : b1.w;
-                const b1H = b1.rotated ? b1.w : b1.h;
-                for (let j = i + 1; j < page.boxes.length; j++) {
-                    const b2 = page.boxes[j];
-                    const b2W = b2.rotated ? b2.h : b2.w;
-                    const b2H = b2.rotated ? b2.w : b2.h;
-                    if (!(b1.x + b1W <= b2.x || b1.x >= b2.x + b2W || b1.y + b1H <= b2.y || b1.y >= b2.y + b2H)) {
-                        overlaps.add(b1.id); overlaps.add(b2.id);
-                    }
-                }
-            }
-            page.boxes.forEach(box => {
-                const drawW = box.rotated ? box.h : box.w;
-                const drawH = box.rotated ? box.w : box.h;
-                const absX = box.x;
-                const absY = box.y + currentYOffset;
-                const isHighlighted = highlightedItemId === box.id || selectedItemIds.has(box.id);
-                const isHovered = hoveredItemId === box.id;
-                const isIrregular = box.classification === '异形';
-                const isOverlapping = overlaps.has(box.id);
-                const isOutOfBounds = (box.x < 0) || (box.x + drawW > layout.totalW); 
-                let fillColor;
-                if (isOverlapping || isOutOfBounds) fillColor = 'rgba(220, 53, 69, 0.5)';
-                else if (isIrregular) fillColor = 'rgba(108, 117, 125, 0.2)';
-                else if (box.isCustom) fillColor = 'rgba(253, 126, 20, 0.2)';
-                else if ((duplicateMap.get(box.internalOrderNumber) || 0) > 1 || box.qty > 1) {
-                    const baseColor = stringToColor(box.internalOrderNumber);
-                    const r = parseInt(baseColor.slice(1, 3), 16);
-                    const g = parseInt(baseColor.slice(3, 5), 16);
-                    const b = parseInt(baseColor.slice(5, 7), 16);
-                    fillColor = `rgba(${r}, ${g}, ${b}, 0.6)`;
-                } else fillColor = 'rgba(0, 123, 255, 0.1)';
-                const angle = box.rotationAngle !== undefined ? box.rotationAngle : (box.rotated ? 90 : 0);
-                ctx.save();
-                ctx.translate(absX + drawW / 2, absY + drawH / 2);
-                ctx.rotate(angle * Math.PI / 180);
-                ctx.translate(-box.w / 2, -box.h / 2);
-                ctx.fillStyle = fillColor;
-                if (isHighlighted) { ctx.strokeStyle = '#28a745'; ctx.lineWidth = 4 / effectiveScale; }
-                else if (isHovered) { ctx.strokeStyle = '#ffc107'; ctx.lineWidth = 2 / effectiveScale; }
-                else { ctx.strokeStyle = isIrregular ? 'rgba(108, 117, 125, 0.8)' : (box.isCustom ? 'rgba(253, 126, 20, 0.8)' : 'rgba(0, 123, 255, 0.8)'); ctx.lineWidth = 1 / effectiveScale; }
-                if (isOverlapping || isOutOfBounds) { ctx.strokeStyle = '#dc3545'; ctx.lineWidth = 3 / effectiveScale; }
-                if (box.pathData) { const path = new Path2D(box.pathData); ctx.fill(path); ctx.stroke(path); }
-                else { drawRoundedRect(ctx, 0, 0, box.w, box.h, box.cornerRadius); ctx.fill(); ctx.stroke(); }
-                if (!isIrregular) {
-                    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                    const centerX = box.w / 2; const centerY = box.h / 2;
-                    let text1 = box.isSupplement ? '补数' : box.internalOrderNumber;
-                    let text2 = `${box.w}x${box.h}`;
-                    const smallerDim = Math.min(box.w, box.h); const idealFontSize = (smallerDim * 0.3) / 2;
-                    ctx.font = `bold ${idealFontSize}px Arial`;
-                    const textWidth = ctx.measureText(text2).width; const maxTextWidth = box.w * 0.9;
-                    let finalFontSize = idealFontSize; if (textWidth > maxTextWidth) finalFontSize = idealFontSize * (maxTextWidth / textWidth);
-                    if (finalFontSize * effectiveScale > 5) {
-                        ctx.fillStyle = '#333'; const textLineHeight = finalFontSize * 1.2;
-                        ctx.font = `bold ${finalFontSize}px Arial`;
-                        ctx.fillText(text1 || '', centerX, centerY - textLineHeight / 2); ctx.fillText(text2, centerX, centerY + textLineHeight / 2);
-                    }
-                }
-                ctx.restore();
+        let animationFrameId;
+        
+        const render = () => {
+            const canvas = canvasRef.current; 
+            const container = canvasContainerRef.current; 
+            if (!canvas || !container) return;
+            const ctx = canvas.getContext('2d');
+            const parentWidth = container.clientWidth;
+            const scale = parentWidth / layout.totalW;
+            let totalCanvasHeightLayoutUnits = 0;
+            layout.pages.forEach((p, i) => {
+                 totalCanvasHeightLayoutUnits += p.h;
+                 if (i < layout.pages.length - 1) totalCanvasHeightLayoutUnits += SECTION_GAP;
             });
-            currentYOffset += pageHeight;
-            if (pIdx < layout.pages.length - 1) {
-                ctx.fillStyle = 'rgba(40, 167, 69, 0.15)'; 
-                ctx.fillRect(0, currentYOffset, layout.totalW, SECTION_GAP);
-                ctx.fillStyle = '#28a745';
-                ctx.font = `bold ${40 / effectiveScale}px Arial`;
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText(`50cm Gap`, layout.totalW / 2, currentYOffset + SECTION_GAP / 2);
-                currentYOffset += SECTION_GAP;
+            totalCanvasHeightLayoutUnits += 100;
+            
+            // Only resize if needed
+            const newW = layout.totalW * scale;
+            const newH = totalCanvasHeightLayoutUnits * scale;
+            if (canvas.width !== newW) canvas.width = newW;
+            if (canvas.height !== newH) canvas.height = newH;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.save();
+            ctx.translate(canvasTransform.x, canvasTransform.y);
+            ctx.scale(canvasTransform.scale, canvasTransform.scale);
+            ctx.save();
+            ctx.scale(scale, scale);
+            const effectiveScale = scale * canvasTransform.scale;
+            
+            // Calculate viewport in layout units
+            const viewportX = -canvasTransform.x / effectiveScale;
+            const viewportY = -canvasTransform.y / effectiveScale;
+            const viewportW = canvas.width / effectiveScale;
+            const viewportH = canvas.height / effectiveScale;
+
+            let currentYOffset = 50; 
+
+            // Cache Path2D objects on items if missing
+            allBoxes.forEach(box => {
+                if (box.pathData && !box._path2d) {
+                    try {
+                        (box as any)._path2d = new Path2D(box.pathData);
+                    } catch (e) {
+                        console.error("Invalid path data", e);
+                    }
+                }
+            });
+
+            layout.pages.forEach((page, pIdx) => {
+                const pageHeight = page.h;
+                const boundaryH = materialLength > 0 ? materialLength : pageHeight;
+                
+                // Draw page boundary only if visible
+                const pageTop = currentYOffset;
+                const pageBottom = currentYOffset + Math.max(boundaryH, pageHeight);
+                
+                const isPageVisible = !(pageBottom < viewportY || pageTop > viewportY + viewportH);
+
+                if (isPageVisible) {
+                    ctx.strokeStyle = '#999';
+                    ctx.lineWidth = 2 / effectiveScale;
+                    ctx.setLineDash([10 / effectiveScale, 10 / effectiveScale]);
+                    ctx.strokeRect(0, currentYOffset, layout.totalW, boundaryH);
+                    ctx.setLineDash([]);
+                    ctx.fillStyle = '#6c757d';
+                    ctx.font = `bold ${24 / effectiveScale}px Arial`;
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'bottom';
+                    ctx.fillText(`Section ${page.pageIndex} (Used: ${pageHeight}mm / Limit: ${boundaryH}mm)`, 0, currentYOffset - (5 / effectiveScale));
+
+                    // Optimize overlap detection: if too many items, limit or skip
+                    const overlaps = new Set();
+                    if (page.boxes.length < 300) { // Reduced O(N^2) guard further
+                        for (let i = 0; i < page.boxes.length; i++) {
+                            const b1 = page.boxes[i];
+                            const b1W = b1.rotated ? b1.h : b1.w;
+                            const b1H = b1.rotated ? b1.w : b1.h;
+                            if (currentYOffset + b1.y + b1H < viewportY || currentYOffset + b1.y > viewportY + viewportH) continue;
+
+                            for (let j = i + 1; j < page.boxes.length; j++) {
+                                const b2 = page.boxes[j];
+                                const b2W = b2.rotated ? b2.h : b2.w;
+                                const b2H = b2.rotated ? b2.w : b2.h;
+                                if (!(b1.x + b1W <= b2.x || b1.x >= b2.x + b2W || b1.y + b1H <= b2.y || b1.y >= b2.y + b2H)) {
+                                    overlaps.add(b1.id); overlaps.add(b2.id);
+                                }
+                            }
+                        }
+                    }
+
+                    page.boxes.forEach(box => {
+                        const drawW = box.rotated ? box.h : box.w;
+                        const drawH = box.rotated ? box.w : box.h;
+                        const absX = box.x;
+                        const absY = box.y + currentYOffset;
+
+                        // Viewport culling
+                        if (absX + drawW < viewportX || absX > viewportX + viewportW || 
+                            absY + drawH < viewportY || absY > viewportY + viewportH) {
+                            return;
+                        }
+
+                        const isHighlighted = highlightedItemId === box.id || selectedItemIds.has(box.id);
+                        const isHovered = hoveredItemId === box.id;
+                        const isIrregular = box.classification === '异形';
+                        const isOverlapping = overlaps.has(box.id);
+                        const isOutOfBounds = (box.x < 0) || (box.x + drawW > layout.totalW); 
+                        
+                        let fillColor;
+                        if (isOverlapping || isOutOfBounds) fillColor = 'rgba(220, 53, 69, 0.5)';
+                        else if (isIrregular) fillColor = 'rgba(108, 117, 125, 0.2)';
+                        else if (box.isCustom) fillColor = 'rgba(253, 126, 20, 0.2)';
+                        else if ((duplicateMap.get(box.internalOrderNumber) || 0) > 1 || box.qty > 1) {
+                            const baseColor = stringToColor(box.internalOrderNumber);
+                            const r = parseInt(baseColor.slice(1, 3), 16);
+                            const g = parseInt(baseColor.slice(3, 5), 16);
+                            const b = parseInt(baseColor.slice(5, 7), 16);
+                            fillColor = `rgba(${r}, ${g}, ${b}, 0.6)`;
+                        } else fillColor = 'rgba(0, 123, 255, 0.1)';
+
+                        const angle = box.rotationAngle !== undefined ? box.rotationAngle : (box.rotated ? 90 : 0);
+                        ctx.save();
+                        ctx.translate(absX + drawW / 2, absY + drawH / 2);
+                        ctx.rotate(angle * Math.PI / 180);
+                        ctx.translate(-box.w / 2, -box.h / 2);
+                        ctx.fillStyle = fillColor;
+                        
+                        if (isHighlighted) { ctx.strokeStyle = '#28a745'; ctx.lineWidth = 4 / effectiveScale; }
+                        else if (isHovered) { ctx.strokeStyle = '#ffc107'; ctx.lineWidth = 2 / effectiveScale; }
+                        else { ctx.strokeStyle = isIrregular ? 'rgba(108, 117, 125, 0.8)' : (box.isCustom ? 'rgba(253, 126, 20, 0.8)' : 'rgba(0, 123, 255, 0.8)'); ctx.lineWidth = 1 / effectiveScale; }
+                        
+                        if (isOverlapping || isOutOfBounds) { ctx.strokeStyle = '#dc3545'; ctx.lineWidth = 3 / effectiveScale; }
+
+                        if (box.pathData) { 
+                            const path = (box as any)._path2d || new Path2D(box.pathData);
+                            ctx.fill(path); 
+                            ctx.stroke(path); 
+                        } else { 
+                            drawRoundedRect(ctx, 0, 0, box.w, box.h, box.cornerRadius); 
+                            ctx.fill(); 
+                            ctx.stroke(); 
+                        }
+                        
+                        if (!isIrregular) {
+                            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                            const centerX = box.w / 2; const centerY = box.h / 2;
+                            let text1 = box.isSupplement ? '补数' : box.internalOrderNumber;
+                            let text2 = `${box.w}x${box.h}`;
+                            const smallerDim = Math.min(box.w, box.h); const idealFontSize = (smallerDim * 0.3) / 2;
+                            ctx.font = `bold ${idealFontSize}px Arial`;
+                            const textWidth = ctx.measureText(text2).width; const maxTextWidth = box.w * 0.9;
+                            let finalFontSize = idealFontSize; if (textWidth > maxTextWidth) finalFontSize = idealFontSize * (maxTextWidth / textWidth);
+                            
+                            if (finalFontSize * effectiveScale > 5) {
+                                ctx.fillStyle = '#333'; const textLineHeight = finalFontSize * 1.2;
+                                ctx.font = `bold ${finalFontSize}px Arial`;
+                                ctx.fillText(text1 || '', centerX, centerY - textLineHeight / 2); 
+                                ctx.fillText(text2, centerX, centerY + textLineHeight / 2);
+                            }
+                        }
+                        ctx.restore();
+                    });
+                }
+
+                currentYOffset += pageHeight;
+                if (pIdx < layout.pages.length - 1) {
+                    const isGapVisible = !(currentYOffset + SECTION_GAP < viewportY || currentYOffset > viewportY + viewportH);
+                    if (isGapVisible) {
+                        ctx.fillStyle = 'rgba(40, 167, 69, 0.15)'; 
+                        ctx.fillRect(0, currentYOffset, layout.totalW, SECTION_GAP);
+                        ctx.fillStyle = '#28a745';
+                        ctx.font = `bold ${40 / effectiveScale}px Arial`;
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText(`50cm Gap`, layout.totalW / 2, currentYOffset + SECTION_GAP / 2);
+                    }
+                    currentYOffset += SECTION_GAP;
+                }
+            });
+            if (selectionBox) {
+                const { x, y, w, h } = selectionBox;
+                ctx.fillStyle = 'rgba(0, 123, 255, 0.3)';
+                ctx.strokeStyle = '#007bff';
+                ctx.lineWidth = 1 / effectiveScale;
+                ctx.fillRect(x, y, w, h);
+                ctx.strokeRect(x, y, w, h);
             }
-        });
-        if (selectionBox) {
-            const { x, y, w, h } = selectionBox;
-            ctx.fillStyle = 'rgba(0, 123, 255, 0.3)';
-            ctx.strokeStyle = '#007bff';
-            ctx.lineWidth = 1 / effectiveScale;
-            ctx.fillRect(x, y, w, h);
-            ctx.strokeRect(x, y, w, h);
-        }
-        if (guideLines.length > 0) {
-            ctx.strokeStyle = '#00ff00';
-            ctx.lineWidth = 1 / effectiveScale;
-            ctx.setLineDash([4 / effectiveScale, 2 / effectiveScale]);
-            guideLines.forEach(line => { ctx.beginPath(); ctx.moveTo(line.x1, line.y1); ctx.lineTo(line.x2, line.y2); ctx.stroke(); });
-            ctx.setLineDash([]);
-        }
-        ctx.restore(); ctx.restore();
-    }, [layout, selectedItem, highlightedItemId, hoveredItemId, canvasTransform, draggingItemId, materialWidth, materialLength, guideLines, materialBoxItems, selectionBox, selectedItemIds]);
+            if (guideLines.length > 0) {
+                ctx.strokeStyle = '#00ff00';
+                ctx.lineWidth = 1 / effectiveScale;
+                ctx.setLineDash([4 / effectiveScale, 2 / effectiveScale]);
+                guideLines.forEach(line => { ctx.beginPath(); ctx.moveTo(line.x1, line.y1); ctx.lineTo(line.x2, line.y2); ctx.stroke(); });
+                ctx.setLineDash([]);
+            }
+            ctx.restore(); ctx.restore();
+        };
+
+        animationFrameId = requestAnimationFrame(render);
+        return () => cancelAnimationFrame(animationFrameId);
+    }, [layout, selectedItem, highlightedItemId, hoveredItemId, canvasTransform, draggingItemId, materialWidth, materialLength, guideLines, materialBoxItems, selectionBox, selectedItemIds, duplicateMap]);
 
     const duplicateOrderNumbers = useMemo(() => { const counts = new Map(); stagedItems.forEach(item => counts.set(item.internalOrderNumber, (counts.get(item.internalOrderNumber) || 0) + 1)); const duplicates = new Set(); counts.forEach((count, key) => { if (count > 1) duplicates.add(key); }); return duplicates; }, [stagedItems]);
     
@@ -3502,9 +4124,55 @@ const App = () => {
                     {currentStep === 3 && groupedOrders && Object.keys(groupedOrders).length > 0 && (
                         <div className="card">
                              <h2>第三步：选择物料组进行排版</h2>
-                             <div className="button-group" style={{marginBottom: '1.5rem'}}><button onClick={() => setCurrentStep(2)} className="button">返回编辑数据</button></div>
+                             <div className="button-group" style={{marginBottom: '1rem'}}><button onClick={() => setCurrentStep(2)} className="button">返回编辑数据</button></div>
+                             
+                             <div className="tab-controls" style={{
+                                 display: 'flex', 
+                                 flexDirection: 'column',
+                                 gap: '1rem', 
+                                 marginBottom: '1rem', 
+                                 padding: '1rem', 
+                                 backgroundColor: '#f8f9fa', 
+                                 borderRadius: '8px',
+                                 border: '1px solid #e9ecef'
+                             }}>
+                                 <div style={{display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap'}}>
+                                     <span style={{fontSize: '0.9rem', fontWeight: 'bold', color: '#495057'}}>材质筛选:</span>
+                                     <button 
+                                         className={`button button-small ${selectedMaterialFilter === '全部' ? 'active' : ''}`} 
+                                         style={selectedMaterialFilter === '全部' ? { background: '#1971c2', color: '#fff' } : {}}
+                                         onClick={() => setSelectedMaterialFilter('全部')}
+                                     >
+                                         全部预览 ({stagedItems.reduce((acc, curr) => acc + (parseInt(String(curr.qty), 10) || 1), 0)})
+                                     </button>
+                                     {stagedUniqueMaterials.map(mat => (
+                                         <button 
+                                             key={mat.name}
+                                             className={`button button-small ${selectedMaterialFilter === mat.name ? 'active' : ''}`} 
+                                             style={selectedMaterialFilter === mat.name ? { background: '#2f9e44', color: '#fff' } : {}}
+                                             onClick={() => setSelectedMaterialFilter(mat.name)}
+                                         >
+                                             {mat.name} ({mat.count})
+                                         </button>
+                                     ))}
+                                     <button 
+                                         className={`button button-small ${selectedGroupKey === '全部混排' ? 'button-primary' : 'button-secondary'}`}
+                                         style={{marginLeft: 'auto'}}
+                                         onClick={() => handleGroupSelection('全部混排')}
+                                     >
+                                         ⚡ 全部混排 ({groupedOrders['全部混排']?.length || 0})
+                                     </button>
+                                 </div>
+                                 <div style={{display: 'flex', gap: '0.5rem', alignItems: 'center'}}>
+                                     <span style={{fontSize: '0.9rem', fontWeight: 'bold', color: '#495057'}}>组内排序:</span>
+                                     <button className={`button button-small ${tabSort === 'alpha' ? 'active' : ''}`} onClick={() => setTabSort('alpha')}>拼音</button>
+                                     <button className={`button button-small ${tabSort === 'qty_desc' ? 'active' : ''}`} onClick={() => setTabSort('qty_desc')}>数量 ↓</button>
+                                     <button className={`button button-small ${tabSort === 'qty_asc' ? 'active' : ''}`} onClick={() => setTabSort('qty_asc')}>数量 ↑</button>
+                                 </div>
+                             </div>
+
                             <div className="group-tabs">
-                                {Object.keys(groupedOrders).sort().map(key => {
+                                {filteredGroupKeys.map(key => {
                                     const groupItems = groupedOrders[key];
                                     const totalCount = groupItems.length;
                                     const multiPieceCount = groupItems.filter(item => multiPieceItemIds.has(item.originalId)).length;
@@ -3513,7 +4181,7 @@ const App = () => {
                                             {key} ({totalCount} 件)
                                             {multiPieceCount > 0 && (
                                                 <span style={{ color: selectedGroupKey === key ? 'lightgreen' : 'var(--success-color)', marginLeft: '0.5rem', fontWeight: 'bold' }}>
-                                                    - 多件{multiPieceCount}件
+                                                    - 多件{multiPieceCount}
                                                 </span>
                                             )}
                                         </button>
@@ -3531,6 +4199,17 @@ const App = () => {
                                         <>
                                             <label className="inline" style={{marginRight: '1rem', cursor: 'pointer', userSelect: 'none'}}><input type="checkbox" checked={useRandom} onChange={(e) => setUseRandom(e.target.checked)} /> 随机优化</label>
                                             <label className="inline" style={{marginRight: '1rem', cursor: 'pointer', userSelect: 'none'}}><input type="checkbox" checked={groupByOrder} onChange={(e) => setGroupByOrder(e.target.checked)} /> 相同订单相邻 (Order Grouping)</label>
+                                            <select 
+                                                id="nestingAlgorithm-action" 
+                                                value={nestingAlgorithm} 
+                                                onChange={(e) => setNestingAlgorithm(e.target.value as AlgorithmType)}
+                                                style={{ marginRight: '1rem', padding: '6px 10px', borderRadius: '4px', border: '1px solid #ddd', backgroundColor: '#fff', fontSize: '0.9rem', fontWeight: 'bold', color: '#333', cursor: 'pointer' }}
+                                            >
+                                                <option value="MAXRECTS">核心: MaxRects (经典/最稳)</option>
+                                                <option value="SKYLINE">核心: Skyline (更快/省料)</option>
+                                                <option value="SHELF">核心: Shelf (极速/行列)</option>
+                                            </select>
+                                            <button onClick={() => setIsLibOpen(true)} className="button" style={{marginRight: '1rem', backgroundColor: '#4b5563', color: 'white'}}>📋 策略逻辑库 (Library)</button>
                                             <button onClick={() => runNesting('AREA_DESC')} className="button button-primary" style={{marginRight: '1rem'}}>开始排版 (Start Nesting)</button>
                                             <button onClick={handleGeneticOptimization} className="button button-secondary" style={{marginRight: '1rem', backgroundColor: '#6f42c1', borderColor: '#6f42c1'}}>🚀 AI 深度遗传算法排版 (GenAI Nesting)</button>
                                             <button onClick={handleAutoOptimize} className="button button-warning">💡 传统自动优化 (Auto-Find Best)</button>
@@ -3651,6 +4330,16 @@ const App = () => {
                  </div>
             )}
             {editingReviewItem && (<ReviewEditModal item={editingReviewItem.item} index={editingReviewItem.index} onChange={handleStagedItemChange} onClose={() => setEditingReviewItem(null)} />)}
+            {multiInsertConfig.open && (
+                <MultiInsertModal 
+                    items={multiInsertConfig.items} 
+                    onConfirm={(count, orientation) => {
+                        handleBoxItemInsert(multiInsertConfig.items, null, false, count, orientation);
+                        setMultiInsertConfig({ open: false, items: [] });
+                    }}
+                    onClose={() => setMultiInsertConfig({ open: false, items: [] })}
+                />
+            )}
             {isMaterialBoxVisible && materialBoxItems.length > 0 && selectedGroupKey !== '全部混排' && (
                 <MaterialBox 
                     title="多件物料框"
@@ -3659,6 +4348,7 @@ const App = () => {
                     selectedGroupKey={selectedBoxGroupKey}
                     onDoubleClick={(items) => handleBoxItemInsert(items)}
                     onClose={() => setIsMaterialBoxVisible(false)}
+                    setMultiInsertConfig={setMultiInsertConfig}
                 />
             )}
             {isPresetBoxVisible && (
@@ -3670,6 +4360,7 @@ const App = () => {
                     selectedGroupKey={selectedPresetGroupKey}
                     onDoubleClick={(items) => handleBoxItemInsert(items, null, true)}
                     onClose={() => setIsPresetBoxVisible(false)}
+                    setMultiInsertConfig={setMultiInsertConfig}
                 />
             )}
             <MappingModal 
@@ -3692,6 +4383,86 @@ const App = () => {
                     : null
                 }
             />
+            {isLibOpen && (
+                <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 3000, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                    <div style={{ backgroundColor: 'white', width: '90%', maxWidth: '800px', maxHeight: '90vh', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)' }}>
+                        <div style={{ padding: '1.5rem', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#f9fafb' }}>
+                            <h2 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 'bold', color: '#111827' }}>📋 策略逻辑库 (Nesting Strategy Library)</h2>
+                            <button onClick={() => setIsLibOpen(false)} style={{ border: 'none', background: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#6b7280' }}>&times;</button>
+                        </div>
+                        <div style={{ padding: '1rem', borderBottom: '1px solid #eee', backgroundColor: '#fff', display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                            <button onClick={exportLibrary} className="button" style={{ fontSize: '0.875rem', padding: '6px 12px', backgroundColor: '#f3f4f6', color: '#374151' }}>📤 导出数据</button>
+                            <div style={{ position: 'relative' }}>
+                                <button className="button" style={{ fontSize: '0.875rem', padding: '6px 12px', backgroundColor: '#f3f4f6', color: '#374151' }}>📥 导入数据</button>
+                                <input type="file" accept=".json" onChange={importLibrary} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} />
+                            </div>
+                            <button onClick={clearLibrary} className="button" style={{ fontSize: '0.875rem', padding: '6px 12px', backgroundColor: '#fee2e2', color: '#b91c1c' }}>🗑️ 清空所有</button>
+                            <div style={{ flex: 1 }}></div>
+                            <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>* 自动学习利用率 ≥ 90% 的方案</span>
+                        </div>
+                        <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem' }}>
+                            {strategyLibrary.length === 0 ? (
+                                <div style={{ textAlign: 'center', padding: '3rem', color: '#9ca3af' }}>暂无策略，排版成功后系统将自动学习。</div>
+                            ) : (
+                                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                    <thead style={{ backgroundColor: '#f3f4f6' }}>
+                                        <tr>
+                                            <th style={{ textAlign: 'left', padding: '12px' }}>名称</th>
+                                            <th style={{ textAlign: 'left', padding: '12px' }}>核心参数</th>
+                                            <th style={{ textAlign: 'center', padding: '12px' }}>预估利用率</th>
+                                            <th style={{ textAlign: 'center', padding: '12px' }}>操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {strategyLibrary.map(s => (
+                                            <tr key={s.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                                                <td style={{ padding: '12px' }}>
+                                                    <div style={{ fontWeight: '600' }}>{s.name}</div>
+                                                    <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{new Date(s.createdAt).toLocaleString()}</div>
+                                                </td>
+                                                <td style={{ padding: '12px' }}>
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                                        <span style={{ backgroundColor: '#e0e7ff', color: '#4338ca', padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem' }}>{s.algorithm}</span>
+                                                        <span style={{ backgroundColor: '#fef3c7', color: '#92400e', padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem' }}>{s.sortStrategy}</span>
+                                                        <span style={{ backgroundColor: '#d1fae5', color: '#065f46', padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem' }}>{s.heuristic}</span>
+                                                        {s.allowRotation && <span style={{ backgroundColor: '#f3f4f6', color: '#374151', padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem' }}>旋转开</span>}
+                                                    </div>
+                                                </td>
+                                                <td style={{ padding: '12px', textAlign: 'center' }}>
+                                                    <div style={{ width: '60px', height: '6px', backgroundColor: '#e5e7eb', borderRadius: '3px', margin: '0 auto 4px' }}>
+                                                        <div style={{ width: `${s.utilization * 100}%`, height: '100%', backgroundColor: s.utilization > 0.95 ? '#10b981' : '#3b82f6', borderRadius: '3px' }}></div>
+                                                    </div>
+                                                    <span style={{ fontSize: '0.875rem', fontWeight: 'bold' }}>{Math.round(s.utilization * 100)}%</span>
+                                                </td>
+                                                <td style={{ padding: '12px', textAlign: 'center' }}>
+                                                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                                                        <button 
+                                                            onClick={() => {
+                                                                setNestingAlgorithm(s.algorithm);
+                                                                setAllowRotation(s.allowRotation);
+                                                                setIsLibOpen(false);
+                                                                runNesting(s.sortStrategy);
+                                                            }} 
+                                                            className="button button-primary" 
+                                                            style={{ fontSize: '0.75rem', padding: '4px 8px' }}
+                                                        >
+                                                            应用
+                                                        </button>
+                                                        <button onClick={() => deleteStrategy(s.id)} style={{ color: '#ef4444', background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.25rem' }}>&times;</button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
+                        <div style={{ padding: '1rem', borderTop: '1px solid #eee', textAlign: 'right', backgroundColor: '#f9fafb' }}>
+                            <button onClick={() => setIsLibOpen(false)} className="button button-primary" style={{ padding: '8px 24px' }}>关闭系统</button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </>
     );
 };

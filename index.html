@@ -6,12 +6,12 @@
     <title>智能排版助手 (Intelligent Nesting Assistant)</title>
     <style>
         :root {
-            --primary-color: #007bff;
+            --primary-color: #ff9f43;
             --secondary-color: #6c757d;
-            --background-color: #f8f9fa;
+            --background-color: #f9f9f9;
             --surface-color: #ffffff;
-            --text-color: #212529;
-            --border-color: #dee2e6;
+            --text-color: #1f2937;
+            --border-color: #e5e7eb;
             --success-color: #28a745;
             --error-color: #dc3545;
             --warning-color: #ffc107;
@@ -28,7 +28,7 @@
             margin: 0;
             background-color: var(--background-color);
             color: var(--text-color);
-            line-height: 1.6;
+            line-height: 1.5;
         }
 
         #root {
@@ -38,29 +38,29 @@
         }
 
         .container {
-            width: 100%;
+            width: 95%;
             max-width: 1800px;
             margin: 0 auto;
-            padding: 2rem;
+            padding: 1rem;
         }
 
         header {
             background-color: var(--surface-color);
             padding: 1rem 2rem;
             border-bottom: 1px solid var(--border-color);
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
             text-align: center;
         }
 
         header h1 {
             margin: 0;
-            font-size: 1.75rem;
-            color: var(--primary-color);
+            font-size: 1.5rem;
+            color: var(--text-color);
         }
 
         header p {
             margin: 0.25rem 0 0;
             color: var(--secondary-color);
+            font-size: 0.9rem;
         }
 
         main {
@@ -69,23 +69,26 @@
 
         .card {
             background-color: var(--surface-color);
-            border-radius: 8px;
+            border-radius: 12px;
             padding: 1.5rem;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            margin-bottom: 2rem;
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+            margin-bottom: 1.5rem;
             display: flex;
             flex-direction: column;
+            border: 1px solid var(--border-color);
         }
 
         .card h2, .card h3 {
             margin-top: 0;
             border-bottom: 1px solid var(--border-color);
             padding-bottom: 0.75rem;
-            font-size: 1.25rem;
+            font-size: 1.1rem;
+            color: var(--text-color);
+            font-weight: 600;
         }
         
         .card h3 {
-            font-size: 1.1rem;
+            font-size: 1rem;
             margin-bottom: 1rem;
         }
 
@@ -144,15 +147,15 @@
 
         .button {
             display: inline-block;
-            padding: 0.75rem 1.5rem;
-            font-size: 1rem;
-            font-weight: 600;
+            padding: 0.5rem 1rem;
+            font-size: 0.9rem;
+            font-weight: 500;
             text-align: center;
             text-decoration: none;
             border: 1px solid transparent;
-            border-radius: 4px;
+            border-radius: 6px;
             cursor: pointer;
-            transition: background-color 0.2s ease-in-out, transform 0.1s ease;
+            transition: background-color 0.2s ease-in-out, opacity 0.2s;
         }
 
         .button-primary {
