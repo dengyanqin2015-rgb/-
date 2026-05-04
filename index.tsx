@@ -296,11 +296,11 @@ const packShelf = (
 
     for (let i = 0; i < items.length; i++) {
         const item = items[i];
-        let w = item.w + spacing;
-        let h = item.h + spacing;
+        let w = item.w;
+        let h = item.h;
         let rotated = false;
 
-        if (allowRotation && h > w && h <= containerWidth) {
+        if (allowRotation && item.h > item.w && item.h <= containerWidth) {
             [w, h] = [h, w];
             rotated = true;
         }
@@ -325,8 +325,8 @@ const packShelf = (
             pageIndex
         });
 
-        currentX += w;
-        shelfHeight = Math.max(shelfHeight, h);
+        currentX += w + spacing;
+        shelfHeight = Math.max(shelfHeight, h + spacing);
     }
 
     const pageH = currentY + shelfHeight;
@@ -374,8 +374,8 @@ const packSkyline = (
 
         for (let i = 0; i < items.length; i++) {
             const item = items[i];
-            const dims = [{ w: item.w + spacing, h: item.h + spacing, rot: false }];
-            if (allowRotation) dims.push({ w: item.h + spacing, h: item.w + spacing, rot: true });
+            const dims = [{ w: item.w, h: item.h, rot: false }];
+            if (allowRotation) dims.push({ w: item.h, h: item.w, rot: true });
 
             for (const d of dims) {
                 // Try to fit at each segment
@@ -419,7 +419,7 @@ const packSkyline = (
         items.splice(bestItemIdx, 1);
 
         // Update skyline
-        const newSegment = { x: bestRect.x, y: bestRect.y + bestRect.h, w: bestRect.w };
+        const newSegment = { x: bestRect.x, y: bestRect.y + bestRect.h + spacing, w: bestRect.w + spacing };
         
         // Find segments covered
         let firstCovered = bestSegmentIdx;
@@ -532,15 +532,15 @@ const packOnePage = (
             let bestScore = MAX_INT; let bestRectIndex = -1; let bestRotated = false;
             for (let j = 0; j < freeRects.length; j++) {
                 const rect = freeRects[j];
-                if (maxHeight > 0 && rect.y + hWithSpacing > maxHeight) continue;
-                if (wWithSpacing <= rect.w && hWithSpacing <= rect.h) {
-                    const score = calculateScore(rect, wWithSpacing, hWithSpacing, heuristic);
+                if (maxHeight > 0 && rect.y + item.h > maxHeight) continue;
+                if (item.w <= rect.w && item.h <= rect.h) {
+                    const score = calculateScore(rect, item.w + spacing, item.h + spacing, heuristic);
                     if (score < bestScore) { bestScore = score; bestRectIndex = j; bestRotated = false; }
                 }
                 if (allowRotation) {
-                    if (maxHeight > 0 && rect.y + wWithSpacing > maxHeight) continue;
-                    if (hWithSpacing <= rect.w && wWithSpacing <= rect.h) {
-                        const score = calculateScore(rect, hWithSpacing, wWithSpacing, heuristic);
+                    if (maxHeight > 0 && rect.y + item.w > maxHeight) continue;
+                    if (item.h <= rect.w && item.w <= rect.h) {
+                        const score = calculateScore(rect, item.h + spacing, item.w + spacing, heuristic);
                         if (score < bestScore) { bestScore = score; bestRectIndex = j; bestRotated = true; }
                     }
                 }
@@ -557,21 +557,19 @@ const packOnePage = (
             let bestMove = null;
             for (let i = 0; i < itemsToProcess.length; i++) {
                 const item = itemsToProcess[i];
-                const wWithSpacing = item.w + spacing;
-                const hWithSpacing = item.h + spacing;
                 for (let j = 0; j < freeRects.length; j++) {
                     const rect = freeRects[j];
-                    if (maxHeight === 0 || rect.y + hWithSpacing <= maxHeight) {
-                        if (wWithSpacing <= rect.w && hWithSpacing <= rect.h) {
-                            let score = calculateScore(rect, wWithSpacing, hWithSpacing, heuristic);
+                    if (maxHeight === 0 || rect.y + item.h <= maxHeight) {
+                        if (item.w <= rect.w && item.h <= rect.h) {
+                            let score = calculateScore(rect, item.w + spacing, item.h + spacing, heuristic);
                             if (useRandom) score += Math.random() * 20;
                             if (score < bestGlobalScore) { bestGlobalScore = score; bestMove = { itemIndex: i, rectIndex: j, rotated: false }; }
                         }
                     }
                     if (allowRotation) {
-                        if (maxHeight === 0 || rect.y + wWithSpacing <= maxHeight) {
-                            if (hWithSpacing <= rect.w && wWithSpacing <= rect.h) {
-                                let score = calculateScore(rect, hWithSpacing, wWithSpacing, heuristic);
+                        if (maxHeight === 0 || rect.y + item.w <= maxHeight) {
+                            if (item.h <= rect.w && item.w <= rect.h) {
+                                let score = calculateScore(rect, item.h + spacing, item.w + spacing, heuristic);
                                 if (useRandom) score += Math.random() * 20;
                                 if (score < bestGlobalScore) { bestGlobalScore = score; bestMove = { itemIndex: i, rectIndex: j, rotated: true }; }
                             }
@@ -707,6 +705,12 @@ interface AppSettings {
     slashSeparator: string;
     enableSpacePattern: boolean;
     enableConcatPattern: boolean;
+    materialCosts: { 
+        material: string; 
+        cost: number; 
+        unit: 'sqm' | 'm';
+        width?: number;
+    }[];
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -733,7 +737,11 @@ const DEFAULT_SETTINGS: AppSettings = {
     slashPrefix: '/',
     slashSeparator: '-',
     enableSpacePattern: true,
-    enableConcatPattern: true
+    enableConcatPattern: true,
+    materialCosts: [
+        { material: '单面绒革', cost: 15.0, unit: 'sqm' },
+        { material: '太空灰', cost: 12.0, unit: 'sqm' }
+    ]
 };
 
 const determineClassifications = (item: { productCode: string, notes: string, isCustom: boolean, w: number, h: number, cornerRadius: CornerRadii, pathData?: string }, settings: AppSettings): string[] => {
@@ -892,7 +900,7 @@ const parseOrderDataLocal = (orders: { internalOrderNumber: string, productCode:
                 }
                 if(dimsFoundInPart) {
                     processed = true; let qty = 1;
-                    const qtyMatch = part.match(/共?\s*([一二两三四五六七八九十\d]+)\s*张/);
+                    const qtyMatch = part.match(/共?\s*([一二两三四五六七八九十]+|\d+)\s*张/);
                     if (qtyMatch) { const qtyStr = qtyMatch[1]; const parsedNum = parseInt(qtyStr, 10); qty = numCharMap[qtyStr] || (!isNaN(parsedNum) ? parsedNum : 1); } 
                     else if (!isCustomOrder) { qty = excelQuantity || 1; }
                     let color = null; for (const c of colorKeywords) { if (part.includes(c)) { color = c; break; } }
@@ -937,7 +945,7 @@ const parseOrderDataLocal = (orders: { internalOrderNumber: string, productCode:
             }
             if (dimsFound) {
                 let qty = 1;
-                const qtyMatch = fullText.match(/共?\s*(\d+|[一二两三四五六七八九十])\s*张/);
+                const qtyMatch = fullText.match(/共?\s*([一二两三四五六七八九十]+|\d+)\s*张/);
                 if(qtyMatch) { const qtyStr = qtyMatch[1]; const parsedNum = parseInt(qtyStr, 10); qty = numCharMap[qtyStr] || (!isNaN(parsedNum) ? parsedNum : 1); } 
                 else if (!isCustomOrder) { qty = excelQuantity || 1; }
                 itemsFoundData.push({w, h, qty, partText: fullText, contextText: contextText});
@@ -1658,6 +1666,28 @@ const SettingsPage = ({ localSettings, setLocalSettings, onUpdate, onBack }: { l
         onUpdate(newSettings);
     };
 
+    const handleUpdateMaterialCost = (index: number, field: string, value: any) => {
+        const current = [...(localSettings.materialCosts || [])];
+        current[index] = { ...current[index], [field]: value };
+        const newSettings = { ...localSettings, materialCosts: current };
+        setLocalSettings(newSettings);
+        onUpdate(newSettings);
+    };
+
+    const handleAddMaterialCost = () => {
+        const current = localSettings.materialCosts || [];
+        const newSettings = { ...localSettings, materialCosts: [...current, { material: '', cost: 0, unit: 'sqm' }] };
+        setLocalSettings(newSettings);
+        onUpdate(newSettings);
+    };
+
+    const handleRemoveMaterialCost = (index: number) => {
+        const current = localSettings.materialCosts || [];
+        const newSettings = { ...localSettings, materialCosts: current.filter((_, i) => i !== index) };
+        setLocalSettings(newSettings);
+        onUpdate(newSettings);
+    };
+
     const handleUpdateSimple = (key: keyof AppSettings, value: any) => {
         const newSettings = { ...localSettings, [key]: value };
         setLocalSettings(newSettings);
@@ -1801,6 +1831,29 @@ const SettingsPage = ({ localSettings, setLocalSettings, onUpdate, onBack }: { l
                             </div>
                         ))}
                         <button className="button button-small" onClick={() => handleAddRule('cornerRadiusRules', { keyword: '', value: 0 })}>新增规则</button>
+                    </div>
+                </div>
+
+                {/* Material Costs */}
+                <div className="settings-card">
+                    <h3>材质单价配置 (Material Costs)</h3>
+                    <p style={{fontSize: '0.75rem', color: '#666', marginBottom: '0.5rem'}}>设置成本价。平方按面积计，米价根据宽幅自动计算长/宽米价。</p>
+                    <div className="rule-list">
+                        {(localSettings.materialCosts || []).map((mc, idx) => (
+                            <div key={idx} className="rule-item" style={{display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center'}}>
+                                <input type="text" value={mc.material} style={{flex: 2, minWidth: '120px'}} onChange={(e) => handleUpdateMaterialCost(idx, 'material', e.target.value)} placeholder="材质名称"/>
+                                <select value={mc.unit || 'sqm'} onChange={(e) => handleUpdateMaterialCost(idx, 'unit', e.target.value)} style={{flex: 1, minWidth: '80px', height: '32px', padding: '0 4px', border: '1px solid #ced4da', borderRadius: '4px'}}>
+                                    <option value="sqm">按平方</option>
+                                    <option value="m">按米</option>
+                                </select>
+                                <input type="number" value={mc.cost} style={{flex: 1, minWidth: '80px'}} onChange={(e) => handleUpdateMaterialCost(idx, 'cost', parseFloat(e.target.value))} placeholder={mc.unit === 'm' ? "单价/米" : "单价/m²"} step="0.1"/>
+                                {mc.unit === 'm' && (
+                                    <input type="number" value={mc.width || 0} style={{flex: 1, minWidth: '100px'}} onChange={(e) => handleUpdateMaterialCost(idx, 'width', parseFloat(e.target.value))} placeholder="宽幅(mm)"/>
+                                )}
+                                <button className="button-icon button-icon-remove" onClick={() => handleRemoveMaterialCost(idx)}>&times;</button>
+                            </div>
+                        ))}
+                        <button className="button button-small" onClick={handleAddMaterialCost}>新增单价配置</button>
                     </div>
                 </div>
 
@@ -2413,6 +2466,10 @@ const App = () => {
     const [nestingProgress, setNestingProgress] = useState(0);
     const [selectedGroupKey, setSelectedGroupKey] = useState(null);
     const [layout, setLayout] = useState<FullLayout | null>(null);
+    const [mergeOrderNumbers, setMergeOrderNumbers] = useState(true);
+    const [unitCosts, setUnitCosts] = useState<Record<string, { cost: number; unit: 'sqm' | 'm'; width?: number }>>({});
+    const allBoxes = useMemo(() => layout ? layout.pages.flatMap(p => p.boxes) : [], [layout]);
+    const uniqueMaterials = useMemo(() => { if (!layout) return []; const mats = new Set(allBoxes.map(b => b.material)); return Array.from(mats).sort(); }, [allBoxes, layout]);
     const [isReviewFullScreen, setIsReviewFullScreen] = useState(false);
     const [editingReviewItem, setEditingReviewItem] = useState<{item: AppItem, index: number} | null>(null);
     const [activeFilter, setActiveFilter] = useState('全部');
@@ -2448,7 +2505,62 @@ const App = () => {
     const [selectionBox, setSelectionBox] = useState<{x: number, y: number, w: number, h: number} | null>(null);
 
     const [selectedExportColumns, setSelectedExportColumns] = useState(EXPORT_COLUMNS.map(c => c.key));
-    const [unitCosts, setUnitCosts] = useState<Record<string, number>>({});
+
+    // Sync unitCosts from settings.materialCosts on load and when settings change
+    useEffect(() => {
+        if (settings.materialCosts) {
+            const newCosts: Record<string, { cost: number; unit: 'sqm' | 'm'; width?: number }> = {};
+            settings.materialCosts.forEach(mc => {
+                if (mc.material) newCosts[mc.material] = { cost: mc.cost, unit: mc.unit || 'sqm', width: mc.width };
+            });
+            setUnitCosts(newCosts);
+        }
+    }, [settings.materialCosts]);
+
+    // Handle unit cost change from UI
+    const updateMaterialCostSetting = useCallback((material: string, field: string, value: any) => {
+        // Update local state for immediate feedback
+        setUnitCosts(prev => {
+            const current = prev[material] || { cost: 0, unit: 'sqm' };
+            return { ...prev, [material]: { ...current, [field]: value } };
+        });
+        
+        // Update settings for persistence
+        setSettings(prev => {
+            const currentCosts = [...(prev.materialCosts || [])];
+            const idx = currentCosts.findIndex(mc => mc.material === material);
+            if (idx >= 0) {
+                currentCosts[idx] = { ...currentCosts[idx], [field]: value };
+            } else {
+                currentCosts.push({ material, cost: 0, unit: 'sqm', [field]: value } as any);
+            }
+            return { ...prev, materialCosts: currentCosts };
+        });
+    }, [setSettings]);
+
+    const handleUnitCostChange = useCallback((material: string, val: string) => {
+        const num = val === '' ? 0 : parseFloat(val);
+        const safeNum = isNaN(num) ? 0 : num;
+        updateMaterialCostSetting(material, 'cost', safeNum);
+    }, [updateMaterialCostSetting]);
+
+    // Auto-sync new materials found in layout to settings
+    useEffect(() => {
+        if (uniqueMaterials.length > 0) {
+            setSettings(prev => {
+                const currentCosts = [...(prev.materialCosts || [])];
+                let changed = false;
+                uniqueMaterials.forEach(mat => {
+                    if (mat && !currentCosts.some(mc => mc.material === mat)) {
+                        currentCosts.push({ material: mat, cost: 0, unit: 'sqm' });
+                        changed = true;
+                    }
+                });
+                if (changed) return { ...prev, materialCosts: currentCosts };
+                return prev;
+            });
+        }
+    }, [uniqueMaterials]);
 
     // Material Box State
     const [materialBoxItems, setMaterialBoxItems] = useState<AppItem[]>([]);
@@ -2470,7 +2582,14 @@ const App = () => {
         setCurrentStep(1); setSelectedGroupKey(null); setLayout(null); setSelectedItem(null); setEditedItem(null);
         setIsEditModalOpen(false); setEditingReviewItem(null); setHighlightedItemId(null); setIsReviewFullScreen(false);
         setIsCanvasFullScreen(false); setCanvasTransform({ scale: 1, x: 0, y: 0 }); setIsOptimizing(false);
-        setOptimizationProgress(0); setStatusText(''); setBestStats({ count: 0, height: 0 }); setGuideLines([]); setUnitCosts({});
+        setOptimizationProgress(0); setStatusText(''); setBestStats({ count: 0, height: 0 }); setGuideLines([]); 
+        const initialCosts: Record<string, { cost: number; unit: 'sqm' | 'm'; width?: number }> = {};
+        if (settings.materialCosts) {
+            settings.materialCosts.forEach(mc => {
+                if (mc.material) initialCosts[mc.material] = { cost: mc.cost, unit: mc.unit || 'sqm', width: mc.width };
+            });
+        }
+        setUnitCosts(initialCosts);
         setMaterialBoxItems([]); setIsMaterialBoxVisible(false); setLayoutHistory([]);
         setIsPresetBoxVisible(false); setSelectedPresetGroupKey(null); setSelectedPresetItems([]);
         setSelectedItemIds(new Set()); setSelectionBox(null); setIsBoxSelecting(false);
@@ -3680,7 +3799,6 @@ const App = () => {
         }
     };
 
-    const allBoxes = useMemo(() => layout ? layout.pages.flatMap(p => p.boxes) : [], [layout]);
     const duplicateMap = useMemo(() => {
         const dMap = new Map();
         allBoxes.forEach(b => {
@@ -3708,8 +3826,6 @@ const App = () => {
     }, [editedItem, layout]);
 
     const handleListDoubleClick = (box) => { setSelectedItem(box); setEditedItem({ ...box, w: box.w, h: box.h }); setIsEditModalOpen(true); setHighlightedItemId(box.id); setSelectedItemIds(new Set([box.id])); };
-    const uniqueMaterials = useMemo(() => { if (!layout) return []; const mats = new Set(allBoxes.map(b => b.material)); return Array.from(mats).sort(); }, [allBoxes, layout]);
-
     useEffect(() => {
         if (!layout || !canvasRef.current || !canvasContainerRef.current) return;
         let animationFrameId;
@@ -3966,37 +4082,114 @@ const App = () => {
         const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = filename; link.click(); URL.revokeObjectURL(link.href);
     }, [layout, selectedGroupKey, layoutStats]);
 
+    const calculateItemCost = useCallback((w: number, h: number, material: string) => {
+        const setting = unitCosts[material];
+        if (!setting || setting.cost === 0) return 0;
+        if (setting.unit === 'm') {
+            const materialWidth = setting.width || 0;
+            const maxDim = Math.max(w, h);
+            const minDim = Math.min(w, h);
+            if (materialWidth > 0) {
+                if (maxDim > materialWidth) return (maxDim / 1000) * setting.cost;
+                else return (minDim / 1000) * setting.cost;
+            }
+            return 0;
+        } else {
+            return (w * h / 1000000) * (typeof setting === 'number' ? setting : setting.cost);
+        }
+    }, [unitCosts]);
+
+    const sortedDisplayItems = useMemo(() => {
+        const sortedBoxes = [...allBoxes].sort((a,b) => (a.pageIndex || 0) - (b.pageIndex || 0) || a.y - b.y || a.x - b.x);
+        if (mergeOrderNumbers) {
+            const orderGroups = new Map<string, any>();
+            const supplements: any[] = [];
+            sortedBoxes.forEach(box => {
+                if (box.isSupplement) {
+                    supplements.push(box);
+                    return;
+                }
+                if (!box.internalOrderNumber) {
+                    supplements.push(box);
+                    return;
+                }
+                const cost = calculateItemCost(box.w, box.h, box.material);
+                if (!orderGroups.has(box.internalOrderNumber)) {
+                    orderGroups.set(box.internalOrderNumber, { ...box, totalCost: cost });
+                } else {
+                    const existing = orderGroups.get(box.internalOrderNumber);
+                    existing.totalCost += cost;
+                }
+            });
+            return [...Array.from(orderGroups.values()), ...supplements].sort((a,b) => (a.pageIndex || 0) - (b.pageIndex || 0) || a.y - b.y || a.x - b.x);
+        }
+        return sortedBoxes;
+    }, [allBoxes, mergeOrderNumbers, calculateItemCost]);
+
     const exportSortedListToExcel = useCallback(() => {
         if (!layout) return;
-        const sortedBoxes = [...allBoxes].sort((a, b) => { if (a.pageIndex !== b.pageIndex) return (a.pageIndex || 1) - (b.pageIndex || 1); return (a.y - b.y) || (a.x - b.x); });
-        const seenOrders = new Set<string>();
-        const filteredBoxes = sortedBoxes.filter(box => { if (box.isSupplement) return false; if (box.internalOrderNumber) { if (seenOrders.has(box.internalOrderNumber)) return false; seenOrders.add(box.internalOrderNumber); } return true; });
+        const sortedBoxes = [...allBoxes].sort((a, b) => { 
+            if (a.pageIndex !== b.pageIndex) return (a.pageIndex || 1) - (b.pageIndex || 1); 
+            return (a.y - b.y) || (a.x - b.x); 
+        });
+
+        let finalDisplayItems: any[] = [];
+        if (mergeOrderNumbers) {
+            const orderGroups = new Map<string, any>();
+            sortedBoxes.forEach(box => {
+                if (box.isSupplement) return;
+                if (!box.internalOrderNumber) return;
+                const cost = calculateItemCost(box.w, box.h, box.material);
+                if (!orderGroups.has(box.internalOrderNumber)) {
+                    orderGroups.set(box.internalOrderNumber, { ...box, totalCost: cost });
+                } else {
+                    const existing = orderGroups.get(box.internalOrderNumber);
+                    existing.totalCost += cost;
+                }
+            });
+            finalDisplayItems = Array.from(orderGroups.values());
+        } else {
+            finalDisplayItems = sortedBoxes.filter(box => !box.isSupplement);
+        }
+
         let regularCount = 0;
-        const data = filteredBoxes.map((box) => {
-            const details = orderDetails.get(box.internalOrderNumber);
+        const data = finalDisplayItems.map((item) => {
+            const details = orderDetails.get(item.internalOrderNumber);
             let idxDisplay = '-'; let orderNumDisplay = '-'; let productCodeDisplay = '';
-            const rawNotes = box.notes || (details ? details.notes : 'N/A'); 
-            regularCount++; idxDisplay = regularCount.toString().padStart(3, '0'); orderNumDisplay = box.internalOrderNumber; productCodeDisplay = details ? details.productCode : 'N/A'; let notesDisplay = `${idxDisplay}.${rawNotes}`;
-            const unitCost = unitCosts[box.material] || 0; const areaM2 = (box.w * box.h) / 1000000; const cost = (areaM2 * unitCost).toFixed(2);
+            const rawNotes = item.notes || (details ? details.notes : 'N/A'); 
+            regularCount++; 
+            idxDisplay = regularCount.toString().padStart(3, '0'); 
+            orderNumDisplay = item.internalOrderNumber; 
+            productCodeDisplay = details ? details.productCode : 'N/A'; 
+            let notesDisplay = `${idxDisplay}.${rawNotes}`;
+            
+            let costVal = 0;
+            if (mergeOrderNumbers) {
+                costVal = item.totalCost;
+            } else {
+                costVal = calculateItemCost(item.w, item.h, item.material);
+            }
+            const cost = costVal.toFixed(2);
+
             const row = {};
             if (selectedExportColumns.includes('index')) row['序号'] = idxDisplay;
             if (selectedExportColumns.includes('internalOrderNumber')) row['内部订单号'] = orderNumDisplay;
             if (selectedExportColumns.includes('productCode')) row['商品编码'] = productCodeDisplay;
             if (selectedExportColumns.includes('notes')) row['卖家备注'] = notesDisplay;
-            if (selectedExportColumns.includes('material')) row['材质'] = box.material;
-            if (selectedExportColumns.includes('color')) row['颜色'] = box.color;
-            if (selectedExportColumns.includes('w')) row['宽(mm)'] = box.w;
-            if (selectedExportColumns.includes('h')) row['高(mm)'] = box.h;
-            if (selectedExportColumns.includes('rotated')) row['旋转'] = box.rotated ? '是' : '否';
+            if (selectedExportColumns.includes('material')) row['材质'] = item.material;
+            if (selectedExportColumns.includes('color')) row['颜色'] = item.color;
+            if (selectedExportColumns.includes('w')) row['宽(mm)'] = item.w;
+            if (selectedExportColumns.includes('h')) row['高(mm)'] = item.h;
+            if (selectedExportColumns.includes('rotated')) row['旋转'] = item.rotated ? '是' : '否';
             if (selectedExportColumns.includes('cost')) row['成本价'] = cost;
-            if (selectedExportColumns.includes('page')) row['分段'] = box.pageIndex;
+            if (selectedExportColumns.includes('page')) row['分段'] = item.pageIndex;
             return row;
         });
         const now = new Date(); const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
         const safeGroupKey = selectedGroupKey ? selectedGroupKey.replace(/[\\/:*?"<>|]/g, '_') : 'Layout';
         const ws = XLSX.utils.json_to_sheet(data); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "排版清单");
-        XLSX.writeFile(wb, `${dateStr}-${safeGroupKey}-${filteredBoxes.length}件.xlsx`);
-    }, [allBoxes, layout, selectedGroupKey, orderDetails, selectedExportColumns, unitCosts]);
+        XLSX.writeFile(wb, `${dateStr}-${safeGroupKey}-${finalDisplayItems.length}件.xlsx`);
+    }, [allBoxes, layout, selectedGroupKey, orderDetails, selectedExportColumns, unitCosts, mergeOrderNumbers]);
 
     const exportStatsToExcel = useCallback(() => {
         if (!layoutStats || !selectedGroupKey) return;
@@ -4265,21 +4458,61 @@ const App = () => {
                                     </div>
                                     <div className="form-group" style={{marginTop: '1.5rem'}}>
                                         <h2>第四步：导出结果</h2>
-                                        <div className="cost-configuration" style={{marginBottom: '1rem', padding: '1rem', backgroundColor: '#f8f9fa', borderRadius: '4px'}}>
-                                            <h4 style={{marginTop: 0, marginBottom: '0.5rem'}}>成本设置 (Cost Settings)</h4>
-                                            <div style={{display: 'flex', flexWrap: 'wrap', gap: '1rem'}}>
-                                                {uniqueMaterials.map(mat => (
-                                                    <div key={mat} className="form-group" style={{marginBottom: 0, flex: '1 1 200px'}}>
-                                                        <label>{mat} 单价 (元/m²)</label>
-                                                        <input type="number" value={unitCosts[mat] || ''} onChange={e => setUnitCosts(prev => ({...prev, [mat]: parseFloat(e.target.value)}))} placeholder="0.00"/>
-                                                    </div>
-                                                ))}
+                                        <div className="cost-configuration" style={{marginBottom: '1rem', padding: '1rem', backgroundColor: '#fdfdfd', borderRadius: '8px', border: '1px solid #e9ecef'}}>
+                                            <h4 style={{marginTop: 0, marginBottom: '0.8rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '1rem', color: '#495057'}}>
+                                                材质成本单价设置 (自动同步至设置页)
+                                                <span style={{fontSize: '0.75rem', fontWeight: 'normal', color: '#6c757d'}}>单位: 元/m² 或 元/米</span>
+                                            </h4>
+                                            <div style={{display: 'flex', flexDirection: 'column', gap: '0.8rem'}}>
+                                                {uniqueMaterials.map(mat => {
+                                                    const setting = unitCosts[mat] || { cost: 0, unit: 'sqm' };
+                                                    return (
+                                                        <div key={mat} style={{display: 'flex', gap: '10px', alignItems: 'center', borderBottom: '1px solid #f0f0f0', paddingBottom: '0.5rem', flexWrap: 'wrap'}}>
+                                                            <label style={{fontSize: '0.85rem', color: '#495057', minWidth: '100px', fontWeight: 'bold'}}>{mat}</label>
+                                                            <select 
+                                                               value={setting.unit || 'sqm'} 
+                                                               onChange={e => updateMaterialCostSetting(mat, 'unit', e.target.value)} 
+                                                               style={{fontSize: '0.8rem', padding: '2px 4px', height: '28px', border: '1px solid #dee2e6', borderRadius: '4px'}}
+                                                            >
+                                                                <option value="sqm">按平方</option>
+                                                                <option value="m">按米</option>
+                                                            </select>
+                                                            <div style={{display: 'flex', gap: '4px', alignItems: 'center'}}>
+                                                                <span style={{fontSize: '0.75rem', color: '#888'}}>单价:</span>
+                                                                <input 
+                                                                   type="number" 
+                                                                   value={setting.cost !== undefined ? setting.cost : ''} 
+                                                                   onChange={e => handleUnitCostChange(mat, e.target.value)} 
+                                                                   placeholder="0.00"
+                                                                   step="0.1"
+                                                                   style={{padding: '0.2rem 0.4rem', fontSize: '0.85rem', width: '80px', borderColor: '#e9ecef'}}
+                                                               />
+                                                            </div>
+                                                            {setting.unit === 'm' && (
+                                                                <div style={{display: 'flex', gap: '4px', alignItems: 'center'}}>
+                                                                    <span style={{fontSize: '0.75rem', color: '#888'}}>宽幅:</span>
+                                                                    <input 
+                                                                       type="number" 
+                                                                       value={setting.width || ''} 
+                                                                       onChange={e => updateMaterialCostSetting(mat, 'width', parseFloat(e.target.value))} 
+                                                                       placeholder="mm"
+                                                                       style={{padding: '0.2rem 0.4rem', fontSize: '0.85rem', width: '80px', borderColor: '#e9ecef'}}
+                                                                   />
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
                                             </div>
                                         </div>
                                         <div style={{marginBottom: '1rem'}}>
                                             <label style={{marginBottom: '0.5rem', display: 'block'}}>选择导出字段:</label>
-                                            <div style={{display: 'flex', gap: '1rem', flexWrap: 'wrap'}}>
+                                            <div style={{display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'center'}}>
                                                 {EXPORT_COLUMNS.map(col => (<label key={col.key} style={{display: 'flex', alignItems: 'center', gap: '0.3rem', cursor: 'pointer'}}><input type="checkbox" checked={selectedExportColumns.includes(col.key)} onChange={(e) => { if (e.target.checked) setSelectedExportColumns(prev => [...prev, col.key]); else setSelectedExportColumns(prev => prev.filter(k => k !== col.key)); }} />{col.label}</label>))}
+                                                <label style={{display: 'flex', alignItems: 'center', gap: '0.3rem', cursor: 'pointer', marginLeft: '1rem', padding: '2px 8px', backgroundColor: '#fff4e6', borderRadius: '4px', border: '1px solid #ffd8a8', fontSize: '0.85rem', fontWeight: '500'}}>
+                                                    <input type="checkbox" checked={mergeOrderNumbers} onChange={(e) => setMergeOrderNumbers(e.target.checked)} />
+                                                    合并多件单号与成本
+                                                </label>
                                             </div>
                                         </div>
                                         <div className="button-group"><button onClick={exportToPlt} className="button button-secondary">导出合并排版图 (PLT - Single File)</button><button onClick={exportSortedListToExcel} className="button button-secondary">导出排序清单 (XLSX)</button></div>
@@ -4291,17 +4524,32 @@ const App = () => {
                                             <tbody>
                                                 {(() => {
                                                     let regularCount = 0;
-                                                    const displayBoxes = [...allBoxes].sort((a,b) => (a.pageIndex || 0) - (b.pageIndex || 0) || a.y - b.y || a.x - b.x);
-                                                    return displayBoxes.map((box) => {
-                                                        const details = orderDetails.get(box.internalOrderNumber);
+                                                    return sortedDisplayItems.map((item) => {
+                                                        const details = orderDetails.get(item.internalOrderNumber);
                                                         let idxDisplay = '-'; let orderNumDisplay = '-'; let productCodeDisplay = '';
-                                                        const rawNotes = box.notes || (details ? details.notes : 'N/A'); 
-                                                        if (box.isSupplement) { productCodeDisplay = box.internalOrderNumber || `补数-${box.w}x${box.h}`; } else { regularCount++; idxDisplay = regularCount.toString().padStart(3, '0'); orderNumDisplay = box.internalOrderNumber; productCodeDisplay = details ? details.productCode : 'N/A'; }
-                                                        const isDuplicate = layoutDuplicateOrderNumbers.has(box.internalOrderNumber) && !box.isSupplement;
-                                                        const unitCost = unitCosts[box.material] || 0; const areaM2 = (box.w * box.h) / 1000000; const cost = (areaM2 * unitCost).toFixed(2);
+                                                        const rawNotes = item.notes || (details ? details.notes : 'N/A'); 
+                                                        if (item.isSupplement) { 
+                                                            productCodeDisplay = item.internalOrderNumber || `补数-${item.w}x${item.h}`; 
+                                                        } else { 
+                                                            regularCount++; 
+                                                            idxDisplay = regularCount.toString().padStart(3, '0'); 
+                                                            orderNumDisplay = item.internalOrderNumber; 
+                                                            productCodeDisplay = details ? details.productCode : 'N/A'; 
+                                                        }
+                                                        const isDuplicate = layoutDuplicateOrderNumbers.has(item.internalOrderNumber) && !item.isSupplement;
+                                                        
+                                                        let costDisplay = '0.00';
+                                                        if (mergeOrderNumbers && !item.isSupplement && item.internalOrderNumber) {
+                                                            costDisplay = (item.totalCost || 0).toFixed(2);
+                                                        } else {
+                                                            const unitCost = unitCosts[item.material] || 0; 
+                                                            const areaM2 = (item.w * item.h) / 1000000; 
+                                                            costDisplay = (areaM2 * (unitCost || 0)).toFixed(2);
+                                                        }
+
                                                         return (
-                                                            <tr key={box.id} data-item-id={box.id} onClick={() => handleRowClick(box)} onDoubleClick={() => handleListDoubleClick(box)} onMouseEnter={() => setHoveredItemId(box.id)} onMouseLeave={() => setHoveredItemId(null)} className={`${highlightedItemId === box.id ? 'selected' : ''} ${isDuplicate ? 'duplicate-row' : ''}`}>
-                                                                <td>{box.pageIndex}</td><td>{idxDisplay}</td><td>{orderNumDisplay}</td><td>{productCodeDisplay}</td><td>{idxDisplay}.{rawNotes}</td><td>{cost}</td>
+                                                            <tr key={item.id} data-item-id={item.id} onClick={() => handleRowClick(item)} onDoubleClick={() => handleListDoubleClick(item)} onMouseEnter={() => setHoveredItemId(item.id)} onMouseLeave={() => setHoveredItemId(null)} className={`${highlightedItemId === item.id ? 'selected' : ''} ${isDuplicate ? 'duplicate-row' : ''}`}>
+                                                                <td>{item.pageIndex}</td><td>{idxDisplay}</td><td>{orderNumDisplay}</td><td>{productCodeDisplay}</td><td>{idxDisplay}.{rawNotes}</td><td>{costDisplay}</td>
                                                             </tr>
                                                         );
                                                     });
