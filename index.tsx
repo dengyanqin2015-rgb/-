@@ -908,7 +908,7 @@ const parseOrderDataLocal = (orders: { internalOrderNumber: string, productCode:
                 }
                 if(dimsFoundInPart) {
                     processed = true; let qty = 1;
-                    const qtyMatch = part.match(/共?\s*([一二两三四五六七八九十]+|\d+)\s*张/);
+                    const qtyMatch = part.match(/(?:^|[^共])\s*([一二两三四五六七八九十]+|\d+)\s*张/);
                     if (qtyMatch) { const qtyStr = qtyMatch[1]; const parsedNum = parseInt(qtyStr, 10); qty = numCharMap[qtyStr] || (!isNaN(parsedNum) ? parsedNum : 1); } 
                     else if (!isCustomOrder) { qty = excelQuantity || 1; }
                     let color = null; for (const c of colorKeywords) { if (part.includes(c)) { color = c; break; } }
