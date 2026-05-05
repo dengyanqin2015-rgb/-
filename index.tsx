@@ -668,7 +668,7 @@ const runGA = async (
             nextPop.push(child);
         }
         population = nextPop;
-        await new Promise(r => setTimeout(r, 0));
+        if (gen % 3 === 0) await new Promise(r => setTimeout(r, 0));
     }
 };
 
@@ -4679,44 +4679,48 @@ const App = () => {
                                         </div>
                                         <div className="button-group"><button onClick={exportToPlt} className="button button-secondary">导出合并排版图 (PLT - Single File)</button><button onClick={exportSortedListToExcel} className="button button-secondary">导出排序清单 (XLSX)</button></div>
                                     </div>
-                                    <h3>排版顺序清单</h3>
-                                    <div style={{maxHeight: '400px', overflowY: 'auto'}}>
-                                        <table className="sorted-orders-table">
-                                            <thead><tr><th>分段</th><th>序号</th><th>内部订单号</th><th>商品编码</th><th>卖家备注</th><th>成本价</th></tr></thead>
-                                            <tbody>
-                                                {(() => {
-                                                    let regularCount = 0;
-                                                    return sortedDisplayItems.map((item) => {
-                                                        const details = orderDetails.get(item.internalOrderNumber);
-                                                        let idxDisplay = '-'; let orderNumDisplay = '-'; let productCodeDisplay = '';
-                                                        const rawNotes = item.notes || (details ? details.notes : 'N/A'); 
-                                                        if (item.isSupplement) { 
-                                                            productCodeDisplay = item.internalOrderNumber || `补数-${item.w}x${item.h}`; 
-                                                        } else { 
-                                                            regularCount++; 
-                                                            idxDisplay = regularCount.toString().padStart(3, '0'); 
-                                                            orderNumDisplay = item.internalOrderNumber; 
-                                                            productCodeDisplay = details ? details.productCode : 'N/A'; 
-                                                        }
-                                                        const isDuplicate = layoutDuplicateOrderNumbers.has(item.internalOrderNumber) && !item.isSupplement;
-                                                        
-                                                        let costDisplay = '0.00';
-                                                        if (mergeOrderNumbers && !item.isSupplement && item.internalOrderNumber) {
-                                                            costDisplay = (item.totalCost || 0).toFixed(2);
-                                                        } else {
-                                                            costDisplay = calculateItemCost(item.w, item.h, item.material).toFixed(2);
-                                                        }
+                                    {!isOptimizing && (
+                                        <>
+                                            <h3>排版顺序清单</h3>
+                                            <div style={{maxHeight: '400px', overflowY: 'auto'}}>
+                                                <table className="sorted-orders-table">
+                                                    <thead><tr><th>分段</th><th>序号</th><th>内部订单号</th><th>商品编码</th><th>卖家备注</th><th>成本价</th></tr></thead>
+                                                    <tbody>
+                                                        {(() => {
+                                                            let regularCount = 0;
+                                                            return sortedDisplayItems.map((item) => {
+                                                                const details = orderDetails.get(item.internalOrderNumber);
+                                                                let idxDisplay = '-'; let orderNumDisplay = '-'; let productCodeDisplay = '';
+                                                                const rawNotes = item.notes || (details ? details.notes : 'N/A'); 
+                                                                if (item.isSupplement) { 
+                                                                    productCodeDisplay = item.internalOrderNumber || `补数-${item.w}x${item.h}`; 
+                                                                } else { 
+                                                                    regularCount++; 
+                                                                    idxDisplay = regularCount.toString().padStart(3, '0'); 
+                                                                    orderNumDisplay = item.internalOrderNumber; 
+                                                                    productCodeDisplay = details ? details.productCode : 'N/A'; 
+                                                                }
+                                                                const isDuplicate = layoutDuplicateOrderNumbers.has(item.internalOrderNumber) && !item.isSupplement;
+                                                                
+                                                                let costDisplay = '0.00';
+                                                                if (mergeOrderNumbers && !item.isSupplement && item.internalOrderNumber) {
+                                                                    costDisplay = (item.totalCost || 0).toFixed(2);
+                                                                } else {
+                                                                    costDisplay = calculateItemCost(item.w, item.h, item.material).toFixed(2);
+                                                                }
 
-                                                        return (
-                                                            <tr key={item.id} data-item-id={item.id} onClick={() => handleRowClick(item)} onDoubleClick={() => handleListDoubleClick(item)} onMouseEnter={() => setHoveredItemId(item.id)} onMouseLeave={() => setHoveredItemId(null)} className={`${highlightedItemId === item.id ? 'selected' : ''} ${isDuplicate ? 'duplicate-row' : ''}`}>
-                                                                <td>{item.pageIndex}</td><td>{idxDisplay}</td><td>{orderNumDisplay}</td><td>{productCodeDisplay}</td><td>{idxDisplay}.{rawNotes}</td><td>{costDisplay}</td>
-                                                            </tr>
-                                                        );
-                                                    });
-                                                })()}
-                                            </tbody>
-                                        </table>
-                                    </div>
+                                                                return (
+                                                                    <tr key={item.id} data-item-id={item.id} onClick={() => handleRowClick(item)} onDoubleClick={() => handleListDoubleClick(item)} onMouseEnter={() => setHoveredItemId(item.id)} onMouseLeave={() => setHoveredItemId(null)} className={`${highlightedItemId === item.id ? 'selected' : ''} ${isDuplicate ? 'duplicate-row' : ''}`}>
+                                                                        <td>{item.pageIndex}</td><td>{idxDisplay}</td><td>{orderNumDisplay}</td><td>{productCodeDisplay}</td><td>{idxDisplay}.{rawNotes}</td><td>{costDisplay}</td>
+                                                                    </tr>
+                                                                );
+                                                            });
+                                                        })()}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </>
+                                    )}
                                 </>
                             )}
                         </div>
