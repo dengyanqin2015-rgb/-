@@ -58,6 +58,8 @@ const EXPORT_COLUMNS = [
     { key: 'w', label: '宽(mm)' },
     { key: 'h', label: '高(mm)' },
     { key: 'rotated', label: '旋转' },
+    { key: 'area', label: '平方数' },
+    { key: 'length', label: '米数' },
     { key: 'cost', label: '成本价' },
     { key: 'page', label: '分段' }
 ];
@@ -4188,9 +4190,15 @@ const App = () => {
         const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = filename; link.click(); URL.revokeObjectURL(link.href);
     }, [layout, selectedGroupKey, layoutStats]);
 
-    const calculateItemCost = useCallback((w: number, h: number, material: string) => {
+    const calculateItemMetrics = useCallback((w: number, h: number, material: string) => {
+        const area = (w * h) / 1000000;
+        let cost = 0;
+        let length = 0;
         const setting = unitCosts[material];
-        if (!setting || !setting.options || setting.options.length === 0) return 0;
+
+        if (!setting || !setting.options || setting.options.length === 0) {
+            return { cost, area, length };
+        }
         
         if (setting.unit === 'm') {
             const maxDim = Math.max(w, h);
@@ -4198,7 +4206,7 @@ const App = () => {
             
             // Find all width options that can accommodate at least the shortest dimension
             const validOptions = setting.options.filter(opt => (opt.width || 0) >= minDim);
-            if (validOptions.length === 0) return 0; // Piece too wide for all rolls
+            if (validOptions.length === 0) return { cost, area, length }; // Piece too wide for all rolls
             
             // "实在用不了便宜的材质采用贵的材质"
             // We want to calculate the cost for each valid roll and pick the cheapest result
@@ -4209,13 +4217,20 @@ const App = () => {
                 // If max side <= width, use min side as length. Else use max side as length.
                 const lengthConsumed = maxDim <= materialWidth ? minDim : maxDim;
                 const totalCost = (lengthConsumed / 1000) * opt.cost;
-                if (totalCost < minTotalCost) minTotalCost = totalCost;
+                if (totalCost < minTotalCost) {
+                    minTotalCost = totalCost;
+                    length = lengthConsumed / 1000;
+                }
             });
             
-            return minTotalCost === Infinity ? 0 : minTotalCost;
+            if (minTotalCost !== Infinity) {
+                cost = minTotalCost;
+            }
+            return { cost, area, length };
         } else {
             // Square meter calculation
-            return (w * h / 1000000) * (setting.options[0]?.cost || 0);
+            cost = area * (setting.options[0]?.cost || 0);
+            return { cost, area, length };
         }
     }, [unitCosts]);
 
@@ -4233,18 +4248,20 @@ const App = () => {
                     supplements.push(box);
                     return;
                 }
-                const cost = calculateItemCost(box.w, box.h, box.material);
+                const metrics = calculateItemMetrics(box.w, box.h, box.material);
                 if (!orderGroups.has(box.internalOrderNumber)) {
-                    orderGroups.set(box.internalOrderNumber, { ...box, totalCost: cost });
+                    orderGroups.set(box.internalOrderNumber, { ...box, totalCost: metrics.cost, totalArea: metrics.area, totalLength: metrics.length });
                 } else {
                     const existing = orderGroups.get(box.internalOrderNumber);
-                    existing.totalCost += cost;
+                    existing.totalCost += metrics.cost;
+                    existing.totalArea += metrics.area;
+                    existing.totalLength += metrics.length;
                 }
             });
             return [...Array.from(orderGroups.values()), ...supplements].sort((a,b) => (a.pageIndex || 0) - (b.pageIndex || 0) || a.y - b.y || a.x - b.x);
         }
         return sortedBoxes;
-    }, [allBoxes, mergeOrderNumbers, calculateItemCost]);
+    }, [allBoxes, mergeOrderNumbers, calculateItemMetrics]);
 
     const exportSortedListToExcel = useCallback(() => {
         if (!layout) return;
@@ -4259,12 +4276,14 @@ const App = () => {
             sortedBoxes.forEach(box => {
                 if (box.isSupplement) return;
                 if (!box.internalOrderNumber) return;
-                const cost = calculateItemCost(box.w, box.h, box.material);
+                const metrics = calculateItemMetrics(box.w, box.h, box.material);
                 if (!orderGroups.has(box.internalOrderNumber)) {
-                    orderGroups.set(box.internalOrderNumber, { ...box, totalCost: cost });
+                    orderGroups.set(box.internalOrderNumber, { ...box, totalCost: metrics.cost, totalArea: metrics.area, totalLength: metrics.length });
                 } else {
                     const existing = orderGroups.get(box.internalOrderNumber);
-                    existing.totalCost += cost;
+                    existing.totalCost += metrics.cost;
+                    existing.totalArea += metrics.area;
+                    existing.totalLength += metrics.length;
                 }
             });
             finalDisplayItems = Array.from(orderGroups.values());
@@ -4283,13 +4302,20 @@ const App = () => {
             productCodeDisplay = details ? details.productCode : 'N/A'; 
             let notesDisplay = `${idxDisplay}.${rawNotes}`;
             
-            let costVal = 0;
+            let costVal = 0, areaVal = 0, lengthVal = 0;
             if (mergeOrderNumbers) {
-                costVal = item.totalCost;
+                costVal = item.totalCost || 0;
+                areaVal = item.totalArea || 0;
+                lengthVal = item.totalLength || 0;
             } else {
-                costVal = calculateItemCost(item.w, item.h, item.material);
+                const metrics = calculateItemMetrics(item.w, item.h, item.material);
+                costVal = metrics.cost;
+                areaVal = metrics.area;
+                lengthVal = metrics.length;
             }
             const cost = costVal.toFixed(2);
+            const area = areaVal.toFixed(4);
+            const length = lengthVal > 0 ? lengthVal.toFixed(4) : '-';
 
             const row = {};
             if (selectedExportColumns.includes('index')) row['序号'] = idxDisplay;
@@ -4301,6 +4327,8 @@ const App = () => {
             if (selectedExportColumns.includes('w')) row['宽(mm)'] = item.w;
             if (selectedExportColumns.includes('h')) row['高(mm)'] = item.h;
             if (selectedExportColumns.includes('rotated')) row['旋转'] = item.rotated ? '是' : '否';
+            if (selectedExportColumns.includes('area')) row['平方数'] = area;
+            if (selectedExportColumns.includes('length')) row['米数'] = length;
             if (selectedExportColumns.includes('cost')) row['成本价'] = cost;
             if (selectedExportColumns.includes('page')) row['分段'] = item.pageIndex;
             return row;
@@ -4691,7 +4719,7 @@ const App = () => {
                                             <h3>排版顺序清单</h3>
                                             <div style={{maxHeight: '400px', overflowY: 'auto'}}>
                                                 <table className="sorted-orders-table">
-                                                    <thead><tr><th>分段</th><th>序号</th><th>内部订单号</th><th>商品编码</th><th>卖家备注</th><th>成本价</th></tr></thead>
+                                                    <thead><tr><th>分段</th><th>序号</th><th>内部订单号</th><th>商品编码</th><th>卖家备注</th><th>平方数</th><th>米数</th><th>成本价</th></tr></thead>
                                                     <tbody>
                                                         {(() => {
                                                             let regularCount = 0;
@@ -4710,15 +4738,22 @@ const App = () => {
                                                                 const isDuplicate = layoutDuplicateOrderNumbers.has(item.internalOrderNumber) && !item.isSupplement;
                                                                 
                                                                 let costDisplay = '0.00';
+                                                                let areaDisplay = '0.0000';
+                                                                let lengthDisplay = '-';
                                                                 if (mergeOrderNumbers && !item.isSupplement && item.internalOrderNumber) {
                                                                     costDisplay = (item.totalCost || 0).toFixed(2);
+                                                                    areaDisplay = (item.totalArea || 0).toFixed(4);
+                                                                    lengthDisplay = (item.totalLength || 0) > 0 ? (item.totalLength || 0).toFixed(4) : '-';
                                                                 } else {
-                                                                    costDisplay = calculateItemCost(item.w, item.h, item.material).toFixed(2);
+                                                                    const metrics = calculateItemMetrics(item.w, item.h, item.material);
+                                                                    costDisplay = metrics.cost.toFixed(2);
+                                                                    areaDisplay = metrics.area.toFixed(4);
+                                                                    lengthDisplay = metrics.length > 0 ? metrics.length.toFixed(4) : '-';
                                                                 }
 
                                                                 return (
                                                                     <tr key={item.id} data-item-id={item.id} onClick={() => handleRowClick(item)} onDoubleClick={() => handleListDoubleClick(item)} onMouseEnter={() => setHoveredItemId(item.id)} onMouseLeave={() => setHoveredItemId(null)} className={`${highlightedItemId === item.id ? 'selected' : ''} ${isDuplicate ? 'duplicate-row' : ''}`}>
-                                                                        <td>{item.pageIndex}</td><td>{idxDisplay}</td><td>{orderNumDisplay}</td><td>{productCodeDisplay}</td><td>{idxDisplay}.{rawNotes}</td><td>{costDisplay}</td>
+                                                                        <td>{item.pageIndex}</td><td>{idxDisplay}</td><td>{orderNumDisplay}</td><td>{productCodeDisplay}</td><td>{idxDisplay}.{rawNotes}</td><td>{areaDisplay}</td><td>{lengthDisplay}</td><td>{costDisplay}</td>
                                                                     </tr>
                                                                 );
                                                             });
