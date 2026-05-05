@@ -2496,9 +2496,18 @@ const App = () => {
         
         if (utilization >= 0.90) {
             setStrategyLibrary(prev => {
-                // Similarity check: avoid duplicates
-                const isDuplicate = prev.some(s => s.algorithm === alg && s.sortStrategy === sort && s.heuristic === heur && s.allowRotation === rot);
-                if (isDuplicate) return prev;
+                const existingIdx = prev.findIndex(s => s.algorithm === alg && s.sortStrategy === sort && s.heuristic === heur && s.allowRotation === rot);
+                if (existingIdx !== -1) {
+                    const updated = [...prev];
+                    updated[existingIdx] = { 
+                        ...updated[existingIdx], 
+                        usageCount: (updated[existingIdx].usageCount || 0) + 1,
+                        // Optionally update utilization if the new one is better
+                        utilization: Math.max(updated[existingIdx].utilization, utilization)
+                    };
+                    saveStrategyLibrary(updated);
+                    return updated;
+                }
 
                 const newStrategy: SavedStrategy = {
                     id: `strat-${Date.now()}`,
@@ -4822,6 +4831,7 @@ const App = () => {
                                             <th style={{ textAlign: 'left', padding: '12px' }}>名称</th>
                                             <th style={{ textAlign: 'left', padding: '12px' }}>核心参数</th>
                                             <th style={{ textAlign: 'center', padding: '12px' }}>预估利用率</th>
+                                            <th style={{ textAlign: 'center', padding: '12px' }}>调用次数</th>
                                             <th style={{ textAlign: 'center', padding: '12px' }}>操作</th>
                                         </tr>
                                     </thead>
@@ -4847,9 +4857,19 @@ const App = () => {
                                                     <span style={{ fontSize: '0.875rem', fontWeight: 'bold' }}>{Math.round(s.utilization * 100)}%</span>
                                                 </td>
                                                 <td style={{ padding: '12px', textAlign: 'center' }}>
+                                                    <span style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#4b5563' }}>{s.usageCount || 0}</span>
+                                                </td>
+                                                <td style={{ padding: '12px', textAlign: 'center' }}>
                                                     <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
                                                         <button 
                                                             onClick={() => {
+                                                                // Manual invocation increments usage immediately if we want, but runNesting already calls learnFromLayout on completion, which will increment if >=90%.
+                                                                // To be safe, let's explicitly increment it here for manual clicks.
+                                                                const updated = strategyLibrary.map(libItem => 
+                                                                    libItem.id === s.id ? { ...libItem, usageCount: (libItem.usageCount || 0) + 1 } : libItem
+                                                                );
+                                                                setStrategyLibrary(updated);
+                                                                saveStrategyLibrary(updated);
                                                                 setNestingAlgorithm(s.algorithm);
                                                                 setAllowRotation(s.allowRotation);
                                                                 setIsLibOpen(false);
