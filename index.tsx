@@ -812,11 +812,9 @@ const parseOrderDataLocal = (orders: { internalOrderNumber: string, productCode:
         const val = parseFloat(numMatch[1]);
         if (isNaN(val)) return 0;
         
-        if (cleanValStr.includes('cm')) return parseFloat((val * 10).toFixed(1));
         if (cleanValStr.includes('mm')) return val;
         
-        // 兜底逻辑：如果是很大的整数(>500)通常是mm，如果是小的通常是cm(或者用户习惯cm)
-        if (Number.isInteger(val) && val >= 500) return val;
+        // 移除导致错误的 500 阈值兜底逻辑，统一默认无单位数值为 cm（乘以10转为mm）
         return parseFloat((val * 10).toFixed(1)); 
     };
 
