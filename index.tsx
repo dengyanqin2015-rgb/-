@@ -640,7 +640,7 @@ const runGA = async (
     onProgress: (progress: number, bestLayout: FullLayout, bestCount: number) => void, shouldStop: () => boolean,
     algorithm: AlgorithmType = 'MAXRECTS'
 ) => {
-    const POP_SIZE = 24; const GENERATIONS = 40; const ELITISM = 2;
+    const POP_SIZE = 16; const GENERATIONS = 20; const ELITISM = 2; // Reduced for performance
     let population = generatePopulation(items, POP_SIZE);
     let bestLayout: FullLayout | null = null; let maxItems = 0; let minHeight = Number.MAX_VALUE;
 
@@ -3479,7 +3479,7 @@ const App = () => {
             setMaterialBoxItems(box);
             if (box.length > 0) setIsMaterialBoxVisible(true);
             let globalBestResult = null;
-            const TOTAL_RUNS = 10;
+            const TOTAL_RUNS = 2; // Reduced for faster search
             for (let run = 0; run < TOTAL_RUNS; run++) {
                 if (stopDeepSearchRef.current) break;
                 await runGA(
@@ -3490,10 +3490,10 @@ const App = () => {
                     allowRotation, 
                     groupByOrder,
                     (genProgress, currentRunBestLayout, currentRunBestCount) => {
-                        const totalProgress = (run * 10) + (genProgress / 10);
+                        const totalProgress = (run * 50) + (genProgress / 2);
                         setOptimizationProgress(Math.round(totalProgress));
-                        const currentGen = Math.round((genProgress / 100) * 40); 
-                        setStatusText(`第 ${run + 1}/${TOTAL_RUNS} 轮 - 进化代数 ${currentGen}/40`);
+                        const currentGen = Math.round((genProgress / 100) * 20); 
+                        setStatusText(`第 ${run + 1}/${TOTAL_RUNS} 轮 - 进化代数 ${currentGen}/20`);
                         let isGlobalBest = false;
                         if (!globalBestResult) {
                             isGlobalBest = true;
@@ -3944,8 +3944,8 @@ const App = () => {
             totalCanvasHeightLayoutUnits += 100;
             
             // Only resize if needed
-            const newW = layout.totalW * scale;
-            const newH = totalCanvasHeightLayoutUnits * scale;
+            const newW = container.clientWidth;
+            const newH = container.clientHeight;
             if (canvas.width !== newW) canvas.width = newW;
             if (canvas.height !== newH) canvas.height = newH;
 
