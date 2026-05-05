@@ -707,9 +707,11 @@ interface AppSettings {
     enableConcatPattern: boolean;
     materialCosts: { 
         material: string; 
-        cost: number; 
         unit: 'sqm' | 'm';
-        width?: number;
+        options: {
+            cost: number;
+            width?: number; // Only used if unit is 'm'
+        }[];
     }[];
 }
 
@@ -739,8 +741,16 @@ const DEFAULT_SETTINGS: AppSettings = {
     enableSpacePattern: true,
     enableConcatPattern: true,
     materialCosts: [
-        { material: '单面绒革', cost: 15.0, unit: 'sqm' },
-        { material: '太空灰', cost: 12.0, unit: 'sqm' }
+        { 
+            material: '单面绒革', 
+            unit: 'sqm', 
+            options: [{ cost: 15.0 }] 
+        },
+        { 
+            material: '太空灰', 
+            unit: 'sqm', 
+            options: [{ cost: 12.0 }] 
+        }
     ]
 };
 
@@ -1669,6 +1679,40 @@ const SettingsPage = ({ localSettings, setLocalSettings, onUpdate, onBack }: { l
     const handleUpdateMaterialCost = (index: number, field: string, value: any) => {
         const current = [...(localSettings.materialCosts || [])];
         current[index] = { ...current[index], [field]: value };
+        // Ensure at least one option exists if unit changes
+        if (field === 'unit' && (!current[index].options || current[index].options.length === 0)) {
+            current[index].options = [{ cost: 0 }];
+        }
+        const newSettings = { ...localSettings, materialCosts: current };
+        setLocalSettings(newSettings);
+        onUpdate(newSettings);
+    };
+
+    const handleUpdateMaterialOption = (matIndex: number, optIndex: number, field: string, value: any) => {
+        const current = [...(localSettings.materialCosts || [])];
+        const options = [...(current[matIndex].options || [])];
+        options[optIndex] = { ...options[optIndex], [field]: value };
+        current[matIndex] = { ...current[matIndex], options };
+        const newSettings = { ...localSettings, materialCosts: current };
+        setLocalSettings(newSettings);
+        onUpdate(newSettings);
+    };
+
+    const handleAddMaterialOption = (matIndex: number) => {
+        const current = [...(localSettings.materialCosts || [])];
+        const options = [...(current[matIndex].options || [])];
+        options.push({ cost: 0, width: 0 });
+        current[matIndex] = { ...current[matIndex], options };
+        const newSettings = { ...localSettings, materialCosts: current };
+        setLocalSettings(newSettings);
+        onUpdate(newSettings);
+    };
+
+    const handleRemoveMaterialOption = (matIndex: number, optIndex: number) => {
+        const current = [...(localSettings.materialCosts || [])];
+        const options = current[matIndex].options.filter((_, i) => i !== optIndex);
+        if (options.length === 0) options.push({ cost: 0 }); // Keep at least one
+        current[matIndex] = { ...current[matIndex], options };
         const newSettings = { ...localSettings, materialCosts: current };
         setLocalSettings(newSettings);
         onUpdate(newSettings);
@@ -1676,7 +1720,7 @@ const SettingsPage = ({ localSettings, setLocalSettings, onUpdate, onBack }: { l
 
     const handleAddMaterialCost = () => {
         const current = localSettings.materialCosts || [];
-        const newSettings = { ...localSettings, materialCosts: [...current, { material: '', cost: 0, unit: 'sqm' }] };
+        const newSettings = { ...localSettings, materialCosts: [...current, { material: '', unit: 'sqm', options: [{ cost: 0 }] }] };
         setLocalSettings(newSettings);
         onUpdate(newSettings);
     };
@@ -1835,25 +1879,51 @@ const SettingsPage = ({ localSettings, setLocalSettings, onUpdate, onBack }: { l
                 </div>
 
                 {/* Material Costs */}
-                <div className="settings-card">
-                    <h3>材质单价配置 (Material Costs)</h3>
-                    <p style={{fontSize: '0.75rem', color: '#666', marginBottom: '0.5rem'}}>设置成本价。平方按面积计，米价根据宽幅自动计算长/宽米价。</p>
-                    <div className="rule-list">
+                <div className="settings-card" style={{gridColumn: '1 / -1'}}>
+                    <h3 style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                        材质成本单价配置 (Material Costs)
+                        <button className="button button-small" onClick={handleAddMaterialCost}>新增材质</button>
+                    </h3>
+                    <p style={{fontSize: '0.75rem', color: '#666', marginBottom: '1rem'}}>
+                        配置材质的价格。<b>按平方</b>：固定单价；<b>按米</b>：支持多级宽度对应不同米价。系统将自动选择能容纳工件的最小（最便宜）宽度。
+                    </p>
+                    
+                    <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '15px'}}>
                         {(localSettings.materialCosts || []).map((mc, idx) => (
-                            <div key={idx} className="rule-item" style={{display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center'}}>
-                                <input type="text" value={mc.material} style={{flex: 2, minWidth: '120px'}} onChange={(e) => handleUpdateMaterialCost(idx, 'material', e.target.value)} placeholder="材质名称"/>
-                                <select value={mc.unit || 'sqm'} onChange={(e) => handleUpdateMaterialCost(idx, 'unit', e.target.value)} style={{flex: 1, minWidth: '80px', height: '32px', padding: '0 4px', border: '1px solid #ced4da', borderRadius: '4px'}}>
-                                    <option value="sqm">按平方</option>
-                                    <option value="m">按米</option>
-                                </select>
-                                <input type="number" value={mc.cost} style={{flex: 1, minWidth: '80px'}} onChange={(e) => handleUpdateMaterialCost(idx, 'cost', parseFloat(e.target.value))} placeholder={mc.unit === 'm' ? "单价/米" : "单价/m²"} step="0.1"/>
-                                {mc.unit === 'm' && (
-                                    <input type="number" value={mc.width || 0} style={{flex: 1, minWidth: '100px'}} onChange={(e) => handleUpdateMaterialCost(idx, 'width', parseFloat(e.target.value))} placeholder="宽幅(mm)"/>
-                                )}
-                                <button className="button-icon button-icon-remove" onClick={() => handleRemoveMaterialCost(idx)}>&times;</button>
+                            <div key={idx} style={{background: '#fff', border: '1px solid #eee', borderRadius: '8px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px'}}>
+                                <div style={{display: 'flex', gap: '8px', alignItems: 'center'}}>
+                                    <input type="text" value={mc.material} style={{flex: 1, fontWeight: 'bold'}} onChange={(e) => handleUpdateMaterialCost(idx, 'material', e.target.value)} placeholder="材质名称"/>
+                                    <select value={mc.unit || 'sqm'} onChange={(e) => handleUpdateMaterialCost(idx, 'unit', e.target.value)} style={{width: '90px', height: '32px', padding: '0 4px', border: '1px solid #ced4da', borderRadius: '4px'}}>
+                                        <option value="sqm">按平方</option>
+                                        <option value="m">按米</option>
+                                    </select>
+                                    <button className="button-icon button-icon-remove" onClick={() => handleRemoveMaterialCost(idx)} title="删除材质">&times;</button>
+                                </div>
+                                
+                                <div style={{background: '#fcfcfc', padding: '8px', borderRadius: '6px', border: '1px dashed #ddd'}}>
+                                    {mc.options?.map((opt, oIdx) => (
+                                        <div key={oIdx} style={{display: 'flex', gap: '8px', marginBottom: oIdx < mc.options.length - 1 ? '8px' : 0, alignItems: 'center'}}>
+                                            <div style={{flex: 1, display: 'flex', alignItems: 'center', gap: '4px'}}>
+                                                <span style={{fontSize: '0.7rem', color: '#999'}}>单价(元):</span>
+                                                <input type="number" value={Number.isNaN(opt.cost) ? '' : opt.cost ?? ''} style={{width: '100%'}} onChange={(e) => handleUpdateMaterialOption(idx, oIdx, 'cost', e.target.value === '' ? '' : parseFloat(e.target.value))} placeholder="价格" step="0.1"/>
+                                            </div>
+                                            {mc.unit === 'm' && (
+                                                <div style={{flex: 1, display: 'flex', alignItems: 'center', gap: '4px'}}>
+                                                    <span style={{fontSize: '0.7rem', color: '#999'}}>宽幅(mm):</span>
+                                                    <input type="number" value={Number.isNaN(opt.width) ? '' : opt.width ?? ''} style={{width: '100%'}} onChange={(e) => handleUpdateMaterialOption(idx, oIdx, 'width', e.target.value === '' ? '' : parseFloat(e.target.value))} placeholder="mm"/>
+                                                </div>
+                                            )}
+                                            {mc.unit === 'm' && (
+                                                <button className="button-icon" style={{color: '#dc3545', fontSize: '1.2rem'}} onClick={() => handleRemoveMaterialOption(idx, oIdx)} disabled={mc.options.length <= 1}>-</button>
+                                            )}
+                                        </div>
+                                    ))}
+                                    {mc.unit === 'm' && (
+                                        <button className="button button-small" style={{marginTop: '8px', width: '100%', padding: '4px'}} onClick={() => handleAddMaterialOption(idx)}>+ 添加规格 (多尺寸匹配)</button>
+                                    )}
+                                </div>
                             </div>
                         ))}
-                        <button className="button button-small" onClick={handleAddMaterialCost}>新增单价配置</button>
                     </div>
                 </div>
 
@@ -2467,10 +2537,12 @@ const App = () => {
     const [selectedGroupKey, setSelectedGroupKey] = useState(null);
     const [layout, setLayout] = useState<FullLayout | null>(null);
     const [mergeOrderNumbers, setMergeOrderNumbers] = useState(true);
-    const [unitCosts, setUnitCosts] = useState<Record<string, { cost: number; unit: 'sqm' | 'm'; width?: number }>>({});
+    const [unitCosts, setUnitCosts] = useState<Record<string, { unit: 'sqm' | 'm'; options: { cost: number; width?: number }[] }>>({});
     const allBoxes = useMemo(() => layout ? layout.pages.flatMap(p => p.boxes) : [], [layout]);
     const uniqueMaterials = useMemo(() => { if (!layout) return []; const mats = new Set(allBoxes.map(b => b.material)); return Array.from(mats).sort(); }, [allBoxes, layout]);
     const [isReviewFullScreen, setIsReviewFullScreen] = useState(false);
+    const [isMaterialCostSectionCollapsed, setIsMaterialCostSectionCollapsed] = useState(false);
+    const [collapsedMaterialItems, setCollapsedMaterialItems] = useState(new Set<string>());
     const [editingReviewItem, setEditingReviewItem] = useState<{item: AppItem, index: number} | null>(null);
     const [activeFilter, setActiveFilter] = useState('全部');
     const [isCanvasFullScreen, setIsCanvasFullScreen] = useState(false);
@@ -2509,30 +2581,51 @@ const App = () => {
     // Sync unitCosts from settings.materialCosts on load and when settings change
     useEffect(() => {
         if (settings.materialCosts) {
-            const newCosts: Record<string, { cost: number; unit: 'sqm' | 'm'; width?: number }> = {};
+            const newCosts: Record<string, { unit: 'sqm' | 'm'; options: { cost: number; width?: number }[] }> = {};
             settings.materialCosts.forEach(mc => {
-                if (mc.material) newCosts[mc.material] = { cost: mc.cost, unit: mc.unit || 'sqm', width: mc.width };
+                if (mc.material) {
+                    newCosts[mc.material] = { 
+                        unit: mc.unit || 'sqm', 
+                        options: Array.isArray(mc.options) && mc.options.length > 0 ? mc.options : [{ cost: (mc as any).cost || 0 }]
+                    };
+                }
             });
             setUnitCosts(newCosts);
         }
     }, [settings.materialCosts]);
 
-    // Handle unit cost change from UI
-    const updateMaterialCostSetting = useCallback((material: string, field: string, value: any) => {
-        // Update local state for immediate feedback
+    const updateMaterialOption = useCallback((material: string, optIndex: number, field: string, value: any) => {
         setUnitCosts(prev => {
-            const current = prev[material] || { cost: 0, unit: 'sqm' };
+            const current = prev[material];
+            if (!current) return prev;
+            const options = [...current.options];
+            options[optIndex] = { ...options[optIndex], [field]: value };
+            return { ...prev, [material]: { ...current, options } };
+        });
+
+        setSettings(prev => {
+            const currentCosts = [...(prev.materialCosts || [])];
+            const idx = currentCosts.findIndex(mc => mc.material === material);
+            if (idx >= 0) {
+                const options = [...(currentCosts[idx].options || [])];
+                options[optIndex] = { ...options[optIndex], [field]: value };
+                currentCosts[idx] = { ...currentCosts[idx], options };
+            }
+            return { ...prev, materialCosts: currentCosts };
+        });
+    }, [setSettings]);
+
+    const updateMaterialBase = useCallback((material: string, field: string, value: any) => {
+        setUnitCosts(prev => {
+            const current = prev[material] || { unit: 'sqm', options: [{ cost: 0 }] };
             return { ...prev, [material]: { ...current, [field]: value } };
         });
-        
-        // Update settings for persistence
+
         setSettings(prev => {
             const currentCosts = [...(prev.materialCosts || [])];
             const idx = currentCosts.findIndex(mc => mc.material === material);
             if (idx >= 0) {
                 currentCosts[idx] = { ...currentCosts[idx], [field]: value };
-            } else {
-                currentCosts.push({ material, cost: 0, unit: 'sqm', [field]: value } as any);
             }
             return { ...prev, materialCosts: currentCosts };
         });
@@ -2541,8 +2634,9 @@ const App = () => {
     const handleUnitCostChange = useCallback((material: string, val: string) => {
         const num = val === '' ? 0 : parseFloat(val);
         const safeNum = isNaN(num) ? 0 : num;
-        updateMaterialCostSetting(material, 'cost', safeNum);
-    }, [updateMaterialCostSetting]);
+        // In simple mode (one option), update the first option's cost
+        updateMaterialOption(material, 0, 'cost', safeNum);
+    }, [updateMaterialOption]);
 
     // Auto-sync new materials found in layout to settings
     useEffect(() => {
@@ -2583,10 +2677,15 @@ const App = () => {
         setIsEditModalOpen(false); setEditingReviewItem(null); setHighlightedItemId(null); setIsReviewFullScreen(false);
         setIsCanvasFullScreen(false); setCanvasTransform({ scale: 1, x: 0, y: 0 }); setIsOptimizing(false);
         setOptimizationProgress(0); setStatusText(''); setBestStats({ count: 0, height: 0 }); setGuideLines([]); 
-        const initialCosts: Record<string, { cost: number; unit: 'sqm' | 'm'; width?: number }> = {};
+        const initialCosts: Record<string, { unit: 'sqm' | 'm'; options: { cost: number; width?: number }[] }> = {};
         if (settings.materialCosts) {
             settings.materialCosts.forEach(mc => {
-                if (mc.material) initialCosts[mc.material] = { cost: mc.cost, unit: mc.unit || 'sqm', width: mc.width };
+                if (mc.material) {
+                    initialCosts[mc.material] = { 
+                        unit: mc.unit || 'sqm', 
+                        options: Array.isArray(mc.options) && mc.options.length > 0 ? mc.options : [{ cost: (mc as any).cost || 0 }]
+                    };
+                }
             });
         }
         setUnitCosts(initialCosts);
@@ -4084,18 +4183,32 @@ const App = () => {
 
     const calculateItemCost = useCallback((w: number, h: number, material: string) => {
         const setting = unitCosts[material];
-        if (!setting || setting.cost === 0) return 0;
+        if (!setting || !setting.options || setting.options.length === 0) return 0;
+        
         if (setting.unit === 'm') {
-            const materialWidth = setting.width || 0;
             const maxDim = Math.max(w, h);
             const minDim = Math.min(w, h);
-            if (materialWidth > 0) {
-                if (maxDim > materialWidth) return (maxDim / 1000) * setting.cost;
-                else return (minDim / 1000) * setting.cost;
-            }
-            return 0;
+            
+            // Find all width options that can accommodate at least the shortest dimension
+            const validOptions = setting.options.filter(opt => (opt.width || 0) >= minDim);
+            if (validOptions.length === 0) return 0; // Piece too wide for all rolls
+            
+            // "实在用不了便宜的材质采用贵的材质"
+            // We want to calculate the cost for each valid roll and pick the cheapest result
+            let minTotalCost = Infinity;
+            
+            validOptions.forEach(opt => {
+                const materialWidth = opt.width || 0;
+                // If max side <= width, use min side as length. Else use max side as length.
+                const lengthConsumed = maxDim <= materialWidth ? minDim : maxDim;
+                const totalCost = (lengthConsumed / 1000) * opt.cost;
+                if (totalCost < minTotalCost) minTotalCost = totalCost;
+            });
+            
+            return minTotalCost === Infinity ? 0 : minTotalCost;
         } else {
-            return (w * h / 1000000) * (typeof setting === 'number' ? setting : setting.cost);
+            // Square meter calculation
+            return (w * h / 1000000) * (setting.options[0]?.cost || 0);
         }
     }, [unitCosts]);
 
@@ -4459,51 +4572,100 @@ const App = () => {
                                     <div className="form-group" style={{marginTop: '1.5rem'}}>
                                         <h2>第四步：导出结果</h2>
                                         <div className="cost-configuration" style={{marginBottom: '1rem', padding: '1rem', backgroundColor: '#fdfdfd', borderRadius: '8px', border: '1px solid #e9ecef'}}>
-                                            <h4 style={{marginTop: 0, marginBottom: '0.8rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '1rem', color: '#495057'}}>
-                                                材质成本单价设置 (自动同步至设置页)
-                                                <span style={{fontSize: '0.75rem', fontWeight: 'normal', color: '#6c757d'}}>单位: 元/m² 或 元/米</span>
+                                            <h4 style={{marginTop: 0, marginBottom: '0.8rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '1rem', color: '#495057', cursor: 'pointer', userSelect: 'none'}} onClick={() => setIsMaterialCostSectionCollapsed(!isMaterialCostSectionCollapsed)}>
+                                                <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+                                                    <span style={{fontSize: '0.8rem', color: '#888', display: 'inline-block', width: '12px'}}>{isMaterialCostSectionCollapsed ? '▶' : '▼'}</span> 材质成本单价设置 (自动同步至设置页)
+                                                </div>
+                                                <span style={{fontSize: '0.75rem', fontWeight: 'normal', color: '#6c757d'}}>
+                                                    {isMaterialCostSectionCollapsed ? (
+                                                        <span>
+                                                            总材质 {uniqueMaterials.length} 个 | 已设置 {uniqueMaterials.filter(m => {
+                                                                const s = unitCosts[m];
+                                                                return s && s.options && s.options.length > 0 && s.options.some(o => o.cost > 0);
+                                                            }).length} 个 | 未设置 {uniqueMaterials.filter(m => {
+                                                                const s = unitCosts[m];
+                                                                return !s || !s.options || s.options.length === 0 || !s.options.some(o => o.cost > 0);
+                                                            }).length} 个
+                                                        </span>
+                                                    ) : (
+                                                        <span>单位: 元/m² 或 元/米 (多尺寸匹配)</span>
+                                                    )}
+                                                </span>
                                             </h4>
-                                            <div style={{display: 'flex', flexDirection: 'column', gap: '0.8rem'}}>
-                                                {uniqueMaterials.map(mat => {
-                                                    const setting = unitCosts[mat] || { cost: 0, unit: 'sqm' };
-                                                    return (
-                                                        <div key={mat} style={{display: 'flex', gap: '10px', alignItems: 'center', borderBottom: '1px solid #f0f0f0', paddingBottom: '0.5rem', flexWrap: 'wrap'}}>
-                                                            <label style={{fontSize: '0.85rem', color: '#495057', minWidth: '100px', fontWeight: 'bold'}}>{mat}</label>
-                                                            <select 
-                                                               value={setting.unit || 'sqm'} 
-                                                               onChange={e => updateMaterialCostSetting(mat, 'unit', e.target.value)} 
-                                                               style={{fontSize: '0.8rem', padding: '2px 4px', height: '28px', border: '1px solid #dee2e6', borderRadius: '4px'}}
-                                                            >
-                                                                <option value="sqm">按平方</option>
-                                                                <option value="m">按米</option>
-                                                            </select>
-                                                            <div style={{display: 'flex', gap: '4px', alignItems: 'center'}}>
-                                                                <span style={{fontSize: '0.75rem', color: '#888'}}>单价:</span>
-                                                                <input 
-                                                                   type="number" 
-                                                                   value={setting.cost !== undefined ? setting.cost : ''} 
-                                                                   onChange={e => handleUnitCostChange(mat, e.target.value)} 
-                                                                   placeholder="0.00"
-                                                                   step="0.1"
-                                                                   style={{padding: '0.2rem 0.4rem', fontSize: '0.85rem', width: '80px', borderColor: '#e9ecef'}}
-                                                               />
-                                                            </div>
-                                                            {setting.unit === 'm' && (
-                                                                <div style={{display: 'flex', gap: '4px', alignItems: 'center'}}>
-                                                                    <span style={{fontSize: '0.75rem', color: '#888'}}>宽幅:</span>
-                                                                    <input 
-                                                                       type="number" 
-                                                                       value={setting.width || ''} 
-                                                                       onChange={e => updateMaterialCostSetting(mat, 'width', parseFloat(e.target.value))} 
-                                                                       placeholder="mm"
-                                                                       style={{padding: '0.2rem 0.4rem', fontSize: '0.85rem', width: '80px', borderColor: '#e9ecef'}}
-                                                                   />
+                                            {!isMaterialCostSectionCollapsed && (
+                                                <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '10px'}}>
+                                                    {uniqueMaterials.map(mat => {
+                                                        const setting = unitCosts[mat] || { unit: 'sqm', options: [{ cost: 0 }] };
+                                                        const isConfigured = setting.options && setting.options.length > 0 && setting.options.some(o => o.cost > 0);
+                                                        const isItemCollapsed = collapsedMaterialItems.has(mat);
+                                                        return (
+                                                            <div key={mat} style={{background: '#fff', border: '1px solid #eee', borderRadius: '6px', padding: '8px'}}>
+                                                                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: isItemCollapsed ? 0 : '6px', cursor: 'pointer', userSelect: 'none'}} onClick={(e) => {
+                                                                     if ((e.target as HTMLElement).tagName === 'SELECT') return;
+                                                                     setCollapsedMaterialItems(prev => {
+                                                                         const next = new Set(prev);
+                                                                         if (next.has(mat)) next.delete(mat); else next.add(mat);
+                                                                         return next;
+                                                                     });
+                                                                }}>
+                                                                    <div style={{display: 'flex', alignItems: 'center', gap: '6px'}}>
+                                                                        <div style={{width: '8px', height: '8px', borderRadius: '50%', backgroundColor: isConfigured ? '#28a745' : '#fd7e14' }} title={isConfigured ? '已设置' : '未设置'}></div>
+                                                                        <span style={{fontSize: '0.8rem', color: '#888', display: 'inline-block', width: '10px'}}>{isItemCollapsed ? '▶' : '▼'}</span>
+                                                                        <span style={{fontSize: '0.85rem', fontWeight: 'bold', color: '#333'}}>{mat}</span>
+                                                                    </div>
+                                                                    <select 
+                                                                        value={setting.unit || 'sqm'} 
+                                                                        onChange={e => updateMaterialBase(mat, 'unit', e.target.value)}
+                                                                        style={{fontSize: '0.75rem', padding: '2px', height: '24px', border: '1px solid #ddd'}}
+                                                                    >
+                                                                        <option value="sqm">按平方</option>
+                                                                        <option value="m">按米</option>
+                                                                    </select>
                                                                 </div>
-                                                            )}
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
+                                                                {!isItemCollapsed && (
+                                                                    <div style={{display: 'flex', flexDirection: 'column', gap: '4px'}}>
+                                                                        {setting.options.map((opt, oIdx) => (
+                                                                            <div key={oIdx} style={{display: 'flex', gap: '4px', alignItems: 'center'}}>
+                                                                                <input 
+                                                                                    type="number" 
+                                                                                    value={Number.isNaN(opt.cost) ? '' : opt.cost ?? ''} 
+                                                                                    onChange={e => updateMaterialOption(mat, oIdx, 'cost', e.target.value === '' ? '' : parseFloat(e.target.value))} 
+                                                                                    placeholder="单价(元)"
+                                                                                    style={{flex: 1, padding: '2px 4px', fontSize: '0.8rem', height: '24px'}}
+                                                                                    onClick={e => e.stopPropagation()}
+                                                                                />
+                                                                                {setting.unit === 'm' && (
+                                                                                    <input 
+                                                                                        type="number" 
+                                                                                        value={Number.isNaN(opt.width) ? '' : opt.width ?? ''} 
+                                                                                        onChange={e => updateMaterialOption(mat, oIdx, 'width', e.target.value === '' ? '' : parseFloat(e.target.value))} 
+                                                                                        placeholder="宽幅(mm)"
+                                                                                        style={{flex: 1.2, padding: '2px 4px', fontSize: '0.8rem', height: '24px'}}
+                                                                                        onClick={e => e.stopPropagation()}
+                                                                                    />
+                                                                                )}
+                                                                            </div>
+                                                                        ))}
+                                                                        {setting.unit === 'm' && (
+                                                                            <button 
+                                                                                onClick={(e) => {
+                                                                                    e.stopPropagation();
+                                                                                    const current = [...setting.options];
+                                                                                    current.push({ cost: 0, width: 0 });
+                                                                                    updateMaterialBase(mat, 'options', current);
+                                                                                }}
+                                                                                style={{fontSize: '0.7rem', padding: '2px', background: '#f8f9fa', border: '1px dashed #ccc', borderRadius: '4px', cursor: 'pointer'}}
+                                                                            >
+                                                                                + 添加阶梯价格
+                                                                            </button>
+                                                                        )}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
                                         </div>
                                         <div style={{marginBottom: '1rem'}}>
                                             <label style={{marginBottom: '0.5rem', display: 'block'}}>选择导出字段:</label>
@@ -4542,9 +4704,7 @@ const App = () => {
                                                         if (mergeOrderNumbers && !item.isSupplement && item.internalOrderNumber) {
                                                             costDisplay = (item.totalCost || 0).toFixed(2);
                                                         } else {
-                                                            const unitCost = unitCosts[item.material] || 0; 
-                                                            const areaM2 = (item.w * item.h) / 1000000; 
-                                                            costDisplay = (areaM2 * (unitCost || 0)).toFixed(2);
+                                                            costDisplay = calculateItemCost(item.w, item.h, item.material).toFixed(2);
                                                         }
 
                                                         return (
